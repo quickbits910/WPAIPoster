@@ -1,0 +1,9 @@
+{
+  "prompt": [
+    "You are scoring how well a single image matches a blog post topic.",
+    "The post is about the following themes: {IMAGE_THEMES}",
+    "Look at the attached image and judge how relevant it is to those themes for use as an illustration in the post.",
+    "Respond with ONLY a single number between 0 and 1 (e.g. 0.0, 0.35, 0.9). Do not add any words, punctuation, or explanation.",
+    "0 = not relevant at all, 1 = perfectly relevant."
+  ]
+}

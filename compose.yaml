@@ -1,0 +1,7 @@
+﻿services:
+  wpaiposter:
+    image: wpaiposter
+    build:
+      context: .
+      dockerfile: Dockerfile
+

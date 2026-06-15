@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+    </PropertyGroup>
+
+    <!-- The test project lives in a nested folder; keep its sources out of this project. -->
+    <ItemGroup>
+        <Compile Remove="WPAIPoster.Tests/**/*.cs" />
+        <Content Remove="WPAIPoster.Tests/**" />
+        <None Remove="WPAIPoster.Tests/**" />
+        <EmbeddedResource Remove="WPAIPoster.Tests/**" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+        <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Update="app.settings.json" CopyToOutputDirectory="PreserveNewest" />
+        <None Update="ssh-config.json" CopyToOutputDirectory="PreserveNewest" />
+        <!-- Copy the Prompts folder to the output, preserving the subfolder. The explicit Link forces
+             the output path (Prompts/<file>) so IDEs (Rider) don't flatten it to the output root.
+             PreserveNewest means end users can edit the copied prompts without a rebuild. -->
+        <None Remove="Prompts/*.json" />
+        <Content Include="Prompts/*.json" Link="Prompts/%(Filename)%(Extension)">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
+</Project>

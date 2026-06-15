@@ -1,0 +1,12 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+
+# Secrets — never commit private keys or the local encryption key
+id_rsa
+id_rsa.*
+*.pem
+*.key
+ssh-config.key

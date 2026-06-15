@@ -1,0 +1,16 @@
+{
+  "provider": "lmstudio",
+  "model": "google/gemma-4-26b-a4b",
+  "visionModel": "google/gemma-4-26b-a4b",
+  "baseUrl": "http://127.0.0.1:1234",
+  "apiKey": null,
+  "imageLibrary": "/run/media/system/4TB/Programs/Invoke/Invoke/outputs/images/",
+  "autoPublish": false,
+  "wordPressFolder": "abc.au",
+  "maxImagesToScore": 3,
+  "imagesPerPost": 1,
+  "seoMetaKeys": {
+    "title": "_yoast_wpseo_title",
+    "description": "_yoast_wpseo_metadesc"
+  }
+}
