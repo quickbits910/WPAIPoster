@@ -9,6 +9,10 @@
   "wordPressFolder": "abc.au",
   "maxImagesToScore": 3,
   "imagesPerPost": 1,
+  "maxImagesToIndex": 1000,
+  "tagPrefix": "AI.",
+  "tagCandidateLimit": 40,
+  "defaultCategory": "Blog",
   "seoMetaKeys": {
     "title": "_yoast_wpseo_title",
     "description": "_yoast_wpseo_metadesc"
