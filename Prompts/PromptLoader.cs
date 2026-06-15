@@ -21,6 +21,7 @@ public static class PromptLoader
 {
     public const string BlogPostPromptFile = "blog-post-prompt.json";
     public const string ImageRelevancePromptFile = "image-relevance-prompt.json";
+    public const string TagToBodyPromptFile = "tag-to-blog-post-body-prompt.json";
 
     public static PromptConfig Load(string fileName)
     {
@@ -65,7 +66,24 @@ public static class PromptLoader
         yield return Path.Combine(Directory.GetCurrentDirectory(), "Prompts");
     }
 
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        AllowTrailingCommas = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+    };
+
     private static PromptConfig Deserialize(string json, string fileName)
-        => JsonSerializer.Deserialize<PromptConfig>(json)
-           ?? throw new InvalidOperationException($"{fileName} is empty or invalid.");
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<PromptConfig>(json, JsonOptions)
+                   ?? throw new InvalidOperationException($"Prompt file '{fileName}' is empty or invalid.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Prompt file '{fileName}' is not valid JSON ({ex.Message}). " +
+                "Each entry must be a quoted JSON string; escape any double-quote inside it as \\\".", ex);
+        }
+    }
 }
