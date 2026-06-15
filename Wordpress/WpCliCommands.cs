@@ -59,6 +59,14 @@ public static class WpCliCommands
     public static string GetAttachmentUrl(int attachmentId)
         => $"wp post get {attachmentId} --field=guid";
 
+    /// <summary>Creates a taxonomy term (e.g. a tag or category) by name. Best-effort: errors if it exists.</summary>
+    public static string CreateTerm(string taxonomy, string name)
+        => $"wp term create {taxonomy} {ShellQuote(name)}";
+
+    /// <summary>Sets (replaces) a post's terms for a taxonomy, matching existing terms by name.</summary>
+    public static string SetPostTerms(int postId, string taxonomy, IEnumerable<string> names)
+        => $"wp post term set {postId} {taxonomy} {string.Join(" ", names.Select(ShellQuote))} --by=name";
+
     /// <summary>Deletes a remote temp file created during publishing.</summary>
     public static string RemoveRemoteFile(string remotePath)
         => $"rm -f {ShellQuote(remotePath)}";

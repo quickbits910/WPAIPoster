@@ -23,7 +23,9 @@
     "6. Body: short scannable paragraphs, <strong> for emphasis, primary keyword integrated naturally.",
     "7. Internal links: propose 1-2 links to the existing posts listed above, with natural anchor text and the exact URL from the list.",
     "8. Call to Action: end with a specific, actionable CTA.",
-    "9. Image themes: list 2-4 short visual themes/subjects that images for this post should depict (used to pick relevant images from a local library).",
+    "9. Image themes: list 3-5 concrete visual subjects (mostly single-word nouns, e.g. 'mountain', 'laptop', 'coffee') that images for this post should depict. These are matched against keyword tags on a local image library, so prefer specific, taggable subjects over abstract phrases.",
+    "10. Tags: provide NO MORE THAN 5 relevant post tags (short lowercase keywords describing the post's topics).",
+    "11. Categories: provide 1-2 post categories (broad sections this post belongs to, Title Case).",
     "",
     "Tone & Style: Authoritative yet conversational, as if advising a colleague. Avoid fluff and passive voice.",
     "",
@@ -35,7 +37,9 @@
     "  \"bodyHtml\": \"string of valid WordPress HTML, including the introduction, all H2/H3 sections, and the CTA\",",
     "  \"imageThemes\": [\"theme1\", \"theme2\"],",
     "  \"internalLinks\": [{ \"anchor\": \"string\", \"url\": \"https://...\" }],",
-    "  \"cta\": \"string\"",
+    "  \"cta\": \"string\",",
+    "  \"tags\": [\"tag1\", \"tag2\"],",
+    "  \"categories\": [\"Category\"]",
     "}"
   ]
 }

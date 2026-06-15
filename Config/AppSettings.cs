@@ -64,6 +64,22 @@ public sealed class AppSettings
     [JsonPropertyName("imagesPerPost")]
     public int? ImagesPerPost { get; set; }
 
+    /// <summary>Maximum number of library images to read tags from when indexing. Null uses the default (1000).</summary>
+    [JsonPropertyName("maxImagesToIndex")]
+    public int? MaxImagesToIndex { get; set; }
+
+    /// <summary>Keyword prefix ImageTagger writes (e.g. "AI."); stripped before tag matching. Null uses the default.</summary>
+    [JsonPropertyName("tagPrefix")]
+    public string? TagPrefix { get; set; }
+
+    /// <summary>Cap on the tag-matched shortlist sent to the tag-selection model. Null uses the default (40).</summary>
+    [JsonPropertyName("tagCandidateLimit")]
+    public int? TagCandidateLimit { get; set; }
+
+    /// <summary>Category applied when the model returns none. Null uses the default ("Blog").</summary>
+    [JsonPropertyName("defaultCategory")]
+    public string? DefaultCategory { get; set; }
+
     /// <summary>Optional SEO plugin meta keys for writing the SEO meta title/description.</summary>
     [JsonPropertyName("seoMetaKeys")]
     public SeoMetaKeys? SeoMetaKeys { get; set; }

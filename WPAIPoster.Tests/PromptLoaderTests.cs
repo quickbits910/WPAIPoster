@@ -50,5 +50,32 @@ public class PromptLoaderTests : IDisposable
     {
         Assert.Equal("blog-post-prompt.json", PromptLoader.BlogPostPromptFile);
         Assert.Equal("image-relevance-prompt.json", PromptLoader.ImageRelevancePromptFile);
+        Assert.Equal("tag-to-blog-post-body-prompt.json", PromptLoader.TagToBodyPromptFile);
+    }
+
+    [Fact]
+    public void Load_MalformedJson_ThrowsClearNamedError()
+    {
+        string path = Path.Combine(_tempDir, "p.json");
+        File.WriteAllText(path, """{ "prompt": ["ok" "broken"] }"""); // missing comma
+
+        var ex = Assert.Throws<InvalidOperationException>(() => PromptLoader.Load("p.json", _tempDir));
+        Assert.Contains("p.json", ex.Message);
+        Assert.Contains("not valid JSON", ex.Message);
+    }
+
+    [Fact]
+    public void Load_AllowsCommentsAndTrailingCommas()
+    {
+        string path = Path.Combine(_tempDir, "p.json");
+        File.WriteAllText(path, """
+            {
+              // a comment
+              "prompt": ["line one", "line two",]
+            }
+            """);
+
+        var cfg = PromptLoader.Load("p.json", _tempDir);
+        Assert.Equal(2, cfg.Prompt.Count);
     }
 }

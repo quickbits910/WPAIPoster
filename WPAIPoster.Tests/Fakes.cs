@@ -1,7 +1,23 @@
+using WPAIPoster.Images;
 using WPAIPoster.Llm;
 using WPAIPoster.Wordpress;
 
 namespace WPAIPoster.Tests;
+
+/// <summary>An <see cref="IImageTagReader"/> that returns canned tags per path (by full path or file name).</summary>
+public sealed class FakeImageTagReader : IImageTagReader
+{
+    private readonly Dictionary<string, string[]> _tags;
+
+    public FakeImageTagReader(Dictionary<string, string[]> tagsByPathOrName) => _tags = tagsByPathOrName;
+
+    public IReadOnlyList<string> ReadTags(string path)
+    {
+        if (_tags.TryGetValue(path, out string[]? byPath)) return byPath;
+        if (_tags.TryGetValue(Path.GetFileName(path), out string[]? byName)) return byName;
+        return Array.Empty<string>();
+    }
+}
 
 /// <summary>An <see cref="ILlmClient"/> that returns queued replies and records the prompts it saw.</summary>
 public sealed class FakeLlmClient : ILlmClient

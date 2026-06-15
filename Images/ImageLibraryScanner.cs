@@ -26,4 +26,46 @@ public static class ImageLibraryScanner
     }
 
     public static bool IsSupported(string path) => Extensions.Contains(Path.GetExtension(path));
+
+    /// <summary>
+    /// Scans the library (newest-first, capped at <paramref name="maxIndex"/>) and reads each image's tags
+    /// via <paramref name="reader"/>, stripping <paramref name="tagPrefix"/>, into an <see cref="ImageTagCatalog"/>.
+    /// </summary>
+    public static ImageTagCatalog ScanWithTags(
+        string? libraryPath, int maxIndex, IImageTagReader reader, string? tagPrefix)
+    {
+        IReadOnlyList<string> paths = Scan(libraryPath, maxIndex);
+        var entries = new List<TaggedImage>(paths.Count);
+
+        foreach (string path in paths)
+        {
+            IReadOnlyList<string> tags = StripPrefix(reader.ReadTags(path), tagPrefix);
+            entries.Add(new TaggedImage(path, tags, SafeModifiedUtc(path)));
+        }
+
+        return new ImageTagCatalog(entries);
+    }
+
+    /// <summary>Strips the configured prefix from each tag (case-insensitive) and dedupes.</summary>
+    public static IReadOnlyList<string> StripPrefix(IReadOnlyList<string> tags, string? prefix)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (string tag in tags)
+        {
+            string t = tag;
+            if (!string.IsNullOrEmpty(prefix) && t.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                t = t[prefix.Length..];
+            t = t.Trim();
+            if (t.Length > 0 && seen.Add(t))
+                result.Add(t);
+        }
+        return result;
+    }
+
+    private static DateTime SafeModifiedUtc(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path); }
+        catch { return DateTime.MinValue; }
+    }
 }

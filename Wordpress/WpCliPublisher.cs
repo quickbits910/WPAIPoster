@@ -13,9 +13,12 @@ public sealed record PublishOutcome(int PostId, bool Published, string? AdminEdi
 /// write SEO meta → upload &amp; import images (featured + inline) → embed image URLs → update post.
 /// Every command runs inside the configured WordPress folder.
 /// </summary>
-public sealed class WpCliPublisher(ISshRunner runner, string wordPressFolder, SeoMetaKeys? seoMetaKeys)
+public sealed class WpCliPublisher(
+    ISshRunner runner, string wordPressFolder, SeoMetaKeys? seoMetaKeys, string defaultCategory = "Blog")
 {
     private const string RemoteTmpDir = "/tmp";
+    private const string TagTaxonomy = "post_tag";
+    private const string CategoryTaxonomy = "category";
 
     /// <summary>
     /// Publishes <paramref name="post"/> with the selected <paramref name="images"/> (already prepared
@@ -40,6 +43,11 @@ public sealed class WpCliPublisher(ISshRunner runner, string wordPressFolder, Se
 
             // 2. SEO meta (optional, plugin-dependent).
             WriteSeoMeta(postId, post);
+
+            // 2b. Tags (max 5) and categories (default applied when none).
+            ApplyTerms(postId, TagTaxonomy, post.Tags.Take(AppLimits.MaxPostTags));
+            var categories = post.Categories.Count > 0 ? post.Categories : new List<string> { defaultCategory };
+            ApplyTerms(postId, CategoryTaxonomy, categories);
 
             // 3. Upload + import each image; collect URLs for inline embedding.
             var embedded = new List<EmbeddedImage>();
@@ -103,6 +111,31 @@ public sealed class WpCliPublisher(ISshRunner runner, string wordPressFolder, Se
         if (!string.IsNullOrWhiteSpace(seoMetaKeys.Description) && post.MetaDescription.Length > 0)
             Run(WpCliCommands.InFolder(wordPressFolder,
                 WpCliCommands.UpdateMeta(postId, seoMetaKeys.Description!, post.MetaDescription)), "set SEO description");
+    }
+
+    /// <summary>
+    /// Ensures each term exists (best-effort <c>wp term create</c>), then assigns them to the post by name.
+    /// Empty/duplicate names are dropped; nothing is assigned when no usable names remain.
+    /// </summary>
+    private void ApplyTerms(int postId, string taxonomy, IEnumerable<string> names)
+    {
+        var clean = names
+            .Select(n => n.Trim())
+            .Where(n => n.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (clean.Count == 0)
+            return;
+
+        foreach (string name in clean)
+        {
+            // Create the term if missing; ignore the "already exists" failure.
+            try { runner.Run(WpCliCommands.InFolder(wordPressFolder, WpCliCommands.CreateTerm(taxonomy, name))); }
+            catch { /* best-effort */ }
+        }
+
+        Run(WpCliCommands.InFolder(wordPressFolder, WpCliCommands.SetPostTerms(postId, taxonomy, clean)),
+            $"set {taxonomy} terms");
     }
 
     private string? BuildAdminUrl(int postId)

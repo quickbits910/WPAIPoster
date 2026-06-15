@@ -77,6 +77,9 @@ if (string.IsNullOrWhiteSpace(settings.Model))
 bool publish = publishOverride ?? settings.AutoPublish ?? false;
 int imagesPerPost = settings.ImagesPerPost ?? AppLimits.DefaultImagesPerPost;
 int maxImagesToScore = settings.MaxImagesToScore ?? AppLimits.DefaultMaxImagesToScore;
+int maxImagesToIndex = settings.MaxImagesToIndex ?? AppLimits.DefaultMaxImagesToIndex;
+string tagPrefix = settings.TagPrefix ?? AppLimits.DefaultTagPrefix;
+int tagCandidateLimit = settings.TagCandidateLimit ?? AppLimits.DefaultTagCandidateLimit;
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
 ILlmClient textClient = LlmClientFactory.Create(http, settings.Provider, settings.Model, settings.BaseUrl, settings.ApiKey);
@@ -107,9 +110,20 @@ try
     var prepared = new List<SelectedImage>();
     if (!noImages && imagesPerPost > 0)
     {
-        var candidates = ImageLibraryScanner.Scan(settings.ImageLibrary, maxImagesToScore);
         Console.WriteLine();
-        Console.WriteLine($"Scoring {candidates.Count} candidate image(s) against themes: " +
+
+        // 3a. Index the library's tags and pre-select images by tag relevance (cheap, no vision calls).
+        ImageTagCatalog catalog = ImageLibraryScanner.ScanWithTags(
+            settings.ImageLibrary, maxImagesToIndex, new ImageTagReader(), tagPrefix);
+        Console.WriteLine($"Indexed {catalog.Images.Count} image(s) ({catalog.TaggedCount} tagged).");
+
+        IReadOnlyList<string> tagPicked = await TagBasedImageSelector.Create(textClient)
+            .SelectAsync(catalog, post, tagCandidateLimit);
+        Console.WriteLine($"Tag matching selected {tagPicked.Count} image(s).");
+
+        // 3b. Top up with newest images, then vision-score the candidate set against the themes.
+        IReadOnlyList<string> candidates = CandidateSet.Build(tagPicked, catalog.NewestPaths, maxImagesToScore);
+        Console.WriteLine($"Vision-scoring {candidates.Count} candidate(s) against themes: " +
                           $"{string.Join(", ", post.ImageThemes)}");
 
         var selected = await ImageRelevanceSelector.Create(visionClient).SelectAsync(
@@ -133,7 +147,8 @@ try
 
     // 4. Publish.
     Console.WriteLine(publish ? "Publishing post..." : "Creating draft...");
-    var publisher = new WpCliPublisher(runner, folder, settings.SeoMetaKeys);
+    var publisher = new WpCliPublisher(runner, folder, settings.SeoMetaKeys,
+        settings.DefaultCategory ?? AppLimits.DefaultCategory);
     PublishOutcome outcome = publisher.Publish(post, prepared, publish);
 
     Console.WriteLine($"\nDone. Post ID {outcome.PostId} ({(outcome.Published ? "published" : "draft")}).");
@@ -181,6 +196,10 @@ static void PrintPost(BlogPostResult post)
     Console.WriteLine($"H1:               {post.H1}");
     if (post.ImageThemes.Count > 0)
         Console.WriteLine($"Image Themes:     {string.Join(", ", post.ImageThemes)}");
+    if (post.Tags.Count > 0)
+        Console.WriteLine($"Tags:             {string.Join(", ", post.Tags.Take(AppLimits.MaxPostTags))}");
+    if (post.Categories.Count > 0)
+        Console.WriteLine($"Categories:       {string.Join(", ", post.Categories)}");
     if (post.InternalLinks.Count > 0)
     {
         Console.WriteLine("Internal Links:");

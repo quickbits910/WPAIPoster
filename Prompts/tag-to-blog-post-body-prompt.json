@@ -1,0 +1,22 @@
+{
+  "prompt": [
+    "You are selecting which library images best illustrate a WordPress blog post, using only each image's keyword tags.",
+    "",
+    "Post title: {TITLE}",
+    "",
+    "Intended image themes (consider these alongside the tags): {IMAGE_THEMES}",
+    "",
+    "Post body (for context):",
+    "{BODY}",
+    "",
+    "Candidate images (each numbered, followed by its keyword tags):",
+    "{TAGGED_IMAGES}",
+    "",
+    "Task: pick the images whose tags are contextually relevant to the post's subject matter and the image themes.",
+    "Match on meaning, not just exact words: ignore common/stop words (a, the, and, then, of, to, etc.), allow",
+    "singular/plural and partial-word matches, and prefer images whose tags clearly relate to the post topic.",
+    "Order your selection best-first. If nothing is relevant, return an empty array.",
+    "",
+    "Return ONLY a JSON array of the selected image numbers, best first, e.g. [3, 1, 7]. No other text."
+  ]
+}

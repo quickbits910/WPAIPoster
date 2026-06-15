@@ -89,6 +89,24 @@ public class BlogPostParserTests
     }
 
     [Fact]
+    public void Parse_TagsAndCategories()
+    {
+        var post = BlogPostParser.Parse("""
+            { "h1": "H", "bodyHtml": "<p>x</p>", "tags": ["aero", "cars"], "categories": ["Automotive"] }
+            """);
+
+        Assert.Equal(new[] { "aero", "cars" }, post.Tags);
+        Assert.Equal(new[] { "Automotive" }, post.Categories);
+    }
+
+    [Fact]
+    public void Parse_CategoriesUnderAlternateKey()
+    {
+        var post = BlogPostParser.Parse("""{ "h1": "H", "bodyHtml": "<p>x</p>", "category": ["News"] }""");
+        Assert.Equal(new[] { "News" }, post.Categories);
+    }
+
+    [Fact]
     public void Parse_NoBody_ThrowsWithRawResponse()
     {
         const string raw = """{ "metaTitle": "T", "h1": "H", "cta": "Go" }""";

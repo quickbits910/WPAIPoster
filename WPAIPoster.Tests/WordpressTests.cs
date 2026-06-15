@@ -70,6 +70,21 @@ public class WpCliCommandsTests
             WpCliCommands.UpdatePostContent(7, "/tmp/x.html"));
         Assert.Equal("rm -f '/tmp/x.html'", WpCliCommands.RemoveRemoteFile("/tmp/x.html"));
     }
+
+    [Fact]
+    public void CreateTerm_QuotesName()
+    {
+        Assert.Equal("wp term create category 'Blog'", WpCliCommands.CreateTerm("category", "Blog"));
+        Assert.Equal(@"wp term create post_tag 'concept cars'",
+            WpCliCommands.CreateTerm("post_tag", "concept cars"));
+    }
+
+    [Fact]
+    public void SetPostTerms_QuotesEachName_ByName()
+    {
+        string cmd = WpCliCommands.SetPostTerms(7, "post_tag", new[] { "aero", "concept cars" });
+        Assert.Equal("wp post term set 7 post_tag 'aero' 'concept cars' --by=name", cmd);
+    }
 }
 
 public class HtmlImageEmbedderTests
@@ -282,5 +297,49 @@ public class WpCliPublisherTests
         var ex = Assert.Throws<InvalidOperationException>(() =>
             publisher.Publish(SamplePost(), Array.Empty<SelectedImage>(), publish: false));
         Assert.Contains("create post", ex.Message);
+    }
+
+    [Fact]
+    public void Publish_AppliesTagsCappedAt5_AndModelCategories()
+    {
+        var runner = new FakeSshRunner(Responder());
+        BlogPostResult post = SamplePost();
+        post.Tags = new List<string> { "a", "b", "c", "d", "e", "f", "g" };
+        post.Categories = new List<string> { "Tech", "Cars" };
+        var publisher = new WpCliPublisher(runner, "site.au", null);
+
+        publisher.Publish(post, Array.Empty<SelectedImage>(), publish: false);
+
+        string setTags = runner.Commands.Single(c => c.Contains("wp post term set") && c.Contains("post_tag"));
+        Assert.Contains("'a' 'b' 'c' 'd' 'e' --by=name", setTags);
+        Assert.DoesNotContain("'f'", setTags); // capped at 5
+        Assert.Equal(5, runner.Commands.Count(c => c.Contains("wp term create post_tag")));
+
+        string setCats = runner.Commands.Single(c => c.Contains("wp post term set") && c.Contains(" category "));
+        Assert.Contains("'Tech' 'Cars'", setCats);
+    }
+
+    [Fact]
+    public void Publish_NoCategories_AppliesDefault()
+    {
+        var runner = new FakeSshRunner(Responder());
+        var publisher = new WpCliPublisher(runner, "site.au", null, defaultCategory: "Blog");
+
+        publisher.Publish(SamplePost(), Array.Empty<SelectedImage>(), publish: false); // SamplePost has no categories
+
+        Assert.Contains(runner.Commands, c => c.Contains("wp term create category 'Blog'"));
+        string setCats = runner.Commands.Single(c => c.Contains("wp post term set") && c.Contains(" category "));
+        Assert.Contains("'Blog' --by=name", setCats);
+    }
+
+    [Fact]
+    public void Publish_NoTags_SkipsTagAssignment()
+    {
+        var runner = new FakeSshRunner(Responder());
+        var publisher = new WpCliPublisher(runner, "site.au", null);
+
+        publisher.Publish(SamplePost(), Array.Empty<SelectedImage>(), publish: false); // SamplePost has no tags
+
+        Assert.DoesNotContain(runner.Commands, c => c.Contains("wp post term set") && c.Contains("post_tag"));
     }
 }

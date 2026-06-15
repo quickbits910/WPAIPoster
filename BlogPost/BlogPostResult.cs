@@ -38,4 +38,12 @@ public sealed class BlogPostResult
 
     [JsonPropertyName("cta")]
     public string Cta { get; set; } = string.Empty;
+
+    /// <summary>Post tags (WordPress <c>post_tag</c> terms). Capped to 5 when applied.</summary>
+    [JsonPropertyName("tags")]
+    public List<string> Tags { get; set; } = new();
+
+    /// <summary>Post categories (WordPress <c>category</c> terms). Defaults to the configured default when empty.</summary>
+    [JsonPropertyName("categories")]
+    public List<string> Categories { get; set; } = new();
 }

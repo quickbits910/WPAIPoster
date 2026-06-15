@@ -75,6 +75,20 @@ public static class BlogPostParser
             if (themes is { Count: > 0 })
                 r.ImageThemes = themes;
         }
+
+        if (r.Tags.Count == 0)
+        {
+            List<string>? tags = FindStringList(root, "tags", "posttags", "tag");
+            if (tags is { Count: > 0 })
+                r.Tags = tags;
+        }
+
+        if (r.Categories.Count == 0)
+        {
+            List<string>? cats = FindStringList(root, "categories", "category", "cats");
+            if (cats is { Count: > 0 })
+                r.Categories = cats;
+        }
     }
 
     /// <summary>Finds the first property whose normalized name matches, as a string or joined string array.</summary>
