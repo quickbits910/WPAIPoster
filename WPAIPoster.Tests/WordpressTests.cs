@@ -72,23 +72,43 @@ public class WpCliCommandsTests
     }
 
     [Fact]
-    public void CreateTerm_QuotesName()
+    public void CreateTerm_QuotesName_WithPorcelain()
     {
-        Assert.Equal("wp term create category 'Blog'", WpCliCommands.CreateTerm("category", "Blog"));
-        Assert.Equal(@"wp term create post_tag 'concept cars'",
+        Assert.Equal("wp term create category 'Blog' --porcelain", WpCliCommands.CreateTerm("category", "Blog"));
+        Assert.Equal("wp term create post_tag 'concept cars' --porcelain",
             WpCliCommands.CreateTerm("post_tag", "concept cars"));
     }
 
     [Fact]
-    public void SetPostTerms_QuotesEachName_ByName()
+    public void GetTermId_FiltersByName()
     {
-        string cmd = WpCliCommands.SetPostTerms(7, "post_tag", new[] { "aero", "concept cars" });
-        Assert.Equal("wp post term set 7 post_tag 'aero' 'concept cars' --by=name", cmd);
+        Assert.Equal("wp term list post_tag --name='aero' --field=term_id",
+            WpCliCommands.GetTermId("post_tag", "aero"));
+    }
+
+    [Fact]
+    public void SetPostTerms_UsesIds_ById()
+    {
+        string cmd = WpCliCommands.SetPostTerms(7, "post_tag", new[] { 12, 34 });
+        Assert.Equal("wp post term set 7 post_tag 12 34 --by=id", cmd);
     }
 }
 
 public class HtmlImageEmbedderTests
 {
+    private const string ThreeH2Body =
+        "<p>intro</p><h2>A</h2><p>a</p><h2>B</h2><p>b</p><h2>C</h2><p>c</p>";
+
+    private static int Pos(string haystack, string needle) =>
+        haystack.IndexOf(needle, StringComparison.Ordinal);
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0, i = 0;
+        while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { count++; i += needle.Length; }
+        return count;
+    }
+
     [Fact]
     public void Embed_NoImages_ReturnsUnchanged()
     {
@@ -96,52 +116,67 @@ public class HtmlImageEmbedderTests
     }
 
     [Fact]
-    public void Embed_NoParagraphs_AppendsAtEnd()
+    public void Embed_FirstImage_GoesUnderH1AtTop()
     {
-        string result = HtmlImageEmbedder.Embed("<h2>Title</h2>",
-            new[] { new EmbeddedImage("https://x/i.jpg", "alt") });
-
-        Assert.Contains("<h2>Title</h2>", result);
-        Assert.Contains("<img src=\"https://x/i.jpg\"", result);
-        Assert.True(result.IndexOf("<img", StringComparison.Ordinal) > result.IndexOf("</h2>", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Embed_InsertsImagesAndEscapesAlt()
-    {
-        string body = "<p>one</p><p>two</p><p>three</p>";
-        string result = HtmlImageEmbedder.Embed(body,
-            new[] { new EmbeddedImage("https://x/i.jpg", "a & \"b\"") });
+        string result = HtmlImageEmbedder.Embed(ThreeH2Body, new[] { new EmbeddedImage("u1", "alt") });
 
         Assert.Equal(1, CountOccurrences(result, "<figure>"));
-        Assert.Contains("alt=\"a &amp; &quot;b&quot;\"", result);
-        // original paragraphs preserved
-        Assert.Contains("<p>one</p>", result);
-        Assert.Contains("<p>three</p>", result);
+        Assert.True(Pos(result, "src=\"u1\"") < Pos(result, "<p>intro</p>")); // above the intro
     }
 
     [Fact]
-    public void Embed_AllImagesInserted()
+    public void Embed_FourImages_TopThen2ndAnd3rdH2ThenBottom()
     {
-        string body = "<p>1</p><p>2</p><p>3</p><p>4</p>";
         var imgs = new[]
         {
             new EmbeddedImage("u1", "a1"),
             new EmbeddedImage("u2", "a2"),
+            new EmbeddedImage("u3", "a3"),
+            new EmbeddedImage("u4", "a4"),
+        };
+
+        string result = HtmlImageEmbedder.Embed(ThreeH2Body, imgs);
+
+        Assert.Equal(4, CountOccurrences(result, "<figure>"));
+
+        // u1 at top (under H1)
+        Assert.True(Pos(result, "src=\"u1\"") < Pos(result, "<p>intro</p>"));
+        // u2 under the 2nd H2 (B): after </h2> of B, before the 3rd H2 (C)
+        Assert.True(Pos(result, "<h2>B</h2>") < Pos(result, "src=\"u2\""));
+        Assert.True(Pos(result, "src=\"u2\"") < Pos(result, "<h2>C</h2>"));
+        // u3 under the 3rd H2 (C)
+        Assert.True(Pos(result, "<h2>C</h2>") < Pos(result, "src=\"u3\""));
+        // u4 at the very bottom
+        Assert.True(Pos(result, "src=\"u4\"") > Pos(result, "<p>c</p>"));
+        // 1st H2 (A) gets no image
+        Assert.True(Pos(result, "src=\"u3\"") > Pos(result, "<h2>A</h2>"));
+    }
+
+    [Fact]
+    public void Embed_FewerH2sThanImages_ExtrasGoToBottom()
+    {
+        string body = "<p>intro</p><h2>Only</h2><p>x</p>";
+        var imgs = new[]
+        {
+            new EmbeddedImage("u1", "a1"),
+            new EmbeddedImage("u2", "a2"),
+            new EmbeddedImage("u3", "a3"),
         };
 
         string result = HtmlImageEmbedder.Embed(body, imgs);
 
-        Assert.Equal(2, CountOccurrences(result, "<figure>"));
-        Assert.Contains("src=\"u1\"", result);
-        Assert.Contains("src=\"u2\"", result);
+        Assert.Equal(3, CountOccurrences(result, "<figure>"));
+        Assert.True(Pos(result, "src=\"u1\"") < Pos(result, "<p>intro</p>")); // top
+        Assert.True(Pos(result, "src=\"u2\"") > Pos(result, "<p>x</p>"));     // bottom
+        Assert.True(Pos(result, "src=\"u3\"") > Pos(result, "src=\"u2\""));   // after u2 (bottom, in order)
     }
 
-    private static int CountOccurrences(string haystack, string needle)
+    [Fact]
+    public void Embed_EscapesAlt()
     {
-        int count = 0, i = 0;
-        while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { count++; i += needle.Length; }
-        return count;
+        string result = HtmlImageEmbedder.Embed("<p>x</p>",
+            new[] { new EmbeddedImage("u", "a & \"b\"") });
+        Assert.Contains("alt=\"a &amp; &quot;b&quot;\"", result);
     }
 }
 
@@ -226,6 +261,7 @@ public class WpCliPublisherTests
         {
             if (cmd.Contains("wp post create")) return new SshCommandResult(0, (++nextId).ToString(), "");
             if (cmd.Contains("wp media import")) return new SshCommandResult(0, (++nextId).ToString(), "");
+            if (cmd.Contains("wp term create")) return new SshCommandResult(0, (++nextId).ToString(), "");
             if (cmd.Contains("--field=guid")) return new SshCommandResult(0, "https://s.test/wp-content/img.jpg", "");
             if (cmd.Contains("wp option get siteurl")) return new SshCommandResult(0, "https://s.test", "");
             return new SshCommandResult(0, "", "");
@@ -310,13 +346,16 @@ public class WpCliPublisherTests
 
         publisher.Publish(post, Array.Empty<SelectedImage>(), publish: false);
 
-        string setTags = runner.Commands.Single(c => c.Contains("wp post term set") && c.Contains("post_tag"));
-        Assert.Contains("'a' 'b' 'c' 'd' 'e' --by=name", setTags);
-        Assert.DoesNotContain("'f'", setTags); // capped at 5
+        // Exactly the first 5 tags are created (capped); 'f'/'g' never touched.
         Assert.Equal(5, runner.Commands.Count(c => c.Contains("wp term create post_tag")));
+        Assert.DoesNotContain(runner.Commands, c => c.Contains("wp term create post_tag 'f'"));
 
-        string setCats = runner.Commands.Single(c => c.Contains("wp post term set") && c.Contains(" category "));
-        Assert.Contains("'Tech' 'Cars'", setCats);
+        string setTags = runner.Commands.Single(c => c.Contains("wp post term set") && c.Contains("post_tag"));
+        Assert.EndsWith("--by=id", setTags);
+
+        Assert.Contains(runner.Commands, c => c.Contains("wp term create category 'Tech'"));
+        Assert.Contains(runner.Commands, c => c.Contains("wp term create category 'Cars'"));
+        Assert.Contains(runner.Commands, c => c.Contains("wp post term set") && c.Contains(" category ") && c.EndsWith("--by=id"));
     }
 
     [Fact]
@@ -327,9 +366,9 @@ public class WpCliPublisherTests
 
         publisher.Publish(SamplePost(), Array.Empty<SelectedImage>(), publish: false); // SamplePost has no categories
 
-        Assert.Contains(runner.Commands, c => c.Contains("wp term create category 'Blog'"));
+        Assert.Contains(runner.Commands, c => c.Contains("wp term create category 'Blog' --porcelain"));
         string setCats = runner.Commands.Single(c => c.Contains("wp post term set") && c.Contains(" category "));
-        Assert.Contains("'Blog' --by=name", setCats);
+        Assert.EndsWith("--by=id", setCats);
     }
 
     [Fact]

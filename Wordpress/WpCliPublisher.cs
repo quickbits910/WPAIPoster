@@ -69,8 +69,9 @@ public sealed class WpCliPublisher(
                 string urlCmd = WpCliCommands.InFolder(wordPressFolder, WpCliCommands.GetAttachmentUrl(attId));
                 string url = runner.Run(urlCmd).TrimmedOut;
 
-                // Embed every image except the featured one inline (featured is shown by the theme).
-                if (!img.IsFeatured && url.Length > 0)
+                // Embed every image inline at a structural position (best-first → under H1, 2nd/3rd H2, bottom).
+                // The best image is still also set as the WordPress featured image above.
+                if (url.Length > 0)
                     embedded.Add(new EmbeddedImage(url, alt));
             }
 
@@ -114,8 +115,8 @@ public sealed class WpCliPublisher(
     }
 
     /// <summary>
-    /// Ensures each term exists (best-effort <c>wp term create</c>), then assigns them to the post by name.
-    /// Empty/duplicate names are dropped; nothing is assigned when no usable names remain.
+    /// Resolves each name to a term ID (creating it if missing), then assigns the IDs to the post.
+    /// Empty/duplicate names and unresolvable terms are dropped; nothing is assigned when none remain.
     /// </summary>
     private void ApplyTerms(int postId, string taxonomy, IEnumerable<string> names)
     {
@@ -127,15 +128,40 @@ public sealed class WpCliPublisher(
         if (clean.Count == 0)
             return;
 
+        var ids = new List<int>();
         foreach (string name in clean)
         {
-            // Create the term if missing; ignore the "already exists" failure.
-            try { runner.Run(WpCliCommands.InFolder(wordPressFolder, WpCliCommands.CreateTerm(taxonomy, name))); }
-            catch { /* best-effort */ }
+            int? id = ResolveTermId(taxonomy, name);
+            if (id is int value && !ids.Contains(value))
+                ids.Add(value);
         }
+        if (ids.Count == 0)
+            return;
 
-        Run(WpCliCommands.InFolder(wordPressFolder, WpCliCommands.SetPostTerms(postId, taxonomy, clean)),
+        Run(WpCliCommands.InFolder(wordPressFolder, WpCliCommands.SetPostTerms(postId, taxonomy, ids)),
             $"set {taxonomy} terms");
+    }
+
+    /// <summary>Creates the term (returning its new ID) or, if it already exists, looks the ID up by name.</summary>
+    private int? ResolveTermId(string taxonomy, string name)
+    {
+        SshCommandResult create = runner.Run(WpCliCommands.InFolder(wordPressFolder,
+            WpCliCommands.CreateTerm(taxonomy, name)));
+        if (create.Success && TryFirstInt(create.TrimmedOut, out int created))
+            return created;
+
+        SshCommandResult list = runner.Run(WpCliCommands.InFolder(wordPressFolder,
+            WpCliCommands.GetTermId(taxonomy, name)));
+        return TryFirstInt(list.TrimmedOut, out int existing) ? existing : null;
+    }
+
+    private static bool TryFirstInt(string text, out int value)
+    {
+        foreach (string token in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+                return true;
+        value = 0;
+        return false;
     }
 
     private string? BuildAdminUrl(int postId)

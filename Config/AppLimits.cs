@@ -14,8 +14,8 @@ public static class AppLimits
     /// <summary>Default number of library images sent to the vision model per post.</summary>
     public const int DefaultMaxImagesToScore = 60;
 
-    /// <summary>Default number of images attached to a post (including the featured image).</summary>
-    public const int DefaultImagesPerPost = 3;
+    /// <summary>Default number of images attached to a post (best under H1, then under 2nd/3rd H2, then bottom).</summary>
+    public const int DefaultImagesPerPost = 4;
 
     /// <summary>Default maximum number of library images to read tags from when indexing.</summary>
     public const int DefaultMaxImagesToIndex = 1000;

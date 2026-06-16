@@ -59,13 +59,20 @@ public static class WpCliCommands
     public static string GetAttachmentUrl(int attachmentId)
         => $"wp post get {attachmentId} --field=guid";
 
-    /// <summary>Creates a taxonomy term (e.g. a tag or category) by name. Best-effort: errors if it exists.</summary>
+    /// <summary>Creates a taxonomy term by name, returning its ID (<c>--porcelain</c>). Errors if it exists.</summary>
     public static string CreateTerm(string taxonomy, string name)
-        => $"wp term create {taxonomy} {ShellQuote(name)}";
+        => $"wp term create {taxonomy} {ShellQuote(name)} --porcelain";
 
-    /// <summary>Sets (replaces) a post's terms for a taxonomy, matching existing terms by name.</summary>
-    public static string SetPostTerms(int postId, string taxonomy, IEnumerable<string> names)
-        => $"wp post term set {postId} {taxonomy} {string.Join(" ", names.Select(ShellQuote))} --by=name";
+    /// <summary>Looks up an existing term's ID by exact name (used when creation reports it already exists).</summary>
+    public static string GetTermId(string taxonomy, string name)
+        => $"wp term list {taxonomy} --name={ShellQuote(name)} --field=term_id";
+
+    /// <summary>
+    /// Sets (replaces) a post's terms for a taxonomy by term ID. <c>wp post term set --by</c> only accepts
+    /// <c>slug</c> or <c>id</c>, so terms are resolved to IDs first.
+    /// </summary>
+    public static string SetPostTerms(int postId, string taxonomy, IEnumerable<int> termIds)
+        => $"wp post term set {postId} {taxonomy} {string.Join(" ", termIds)} --by=id";
 
     /// <summary>Deletes a remote temp file created during publishing.</summary>
     public static string RemoveRemoteFile(string remotePath)
