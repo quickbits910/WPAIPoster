@@ -10,3 +10,4 @@ id_rsa.*
 *.pem
 *.key
 ssh-config.key
+ssh-config.json

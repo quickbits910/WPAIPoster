@@ -1,7 +1,37 @@
 using System.Security.Cryptography;
 using WPAIPoster.Config;
+using WPAIPoster.Wordpress;
 
 namespace WPAIPoster.Tests;
+
+public class HostKeyFingerprintTests
+{
+    [Theory]
+    [InlineData("SHA256:c4zMxgNRjkUH6fRezVaAD3+rwAoDDc40KHwqETgOo40", "c4zMxgNRjkUH6fRezVaAD3+rwAoDDc40KHwqETgOo40")]
+    [InlineData("  c4zMxgNRjkUH6fRezVaAD3+rwAoDDc40KHwqETgOo40==  ", "c4zMxgNRjkUH6fRezVaAD3+rwAoDDc40KHwqETgOo40")]
+    [InlineData("sha256:ABC=", "ABC")]
+    public void NormalizeFingerprint_StripsPrefixPaddingWhitespace(string input, string expected)
+    {
+        Assert.Equal(expected, SshNetRunner.NormalizeFingerprint(input));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void NormalizeFingerprint_BlankIsNull(string? input)
+    {
+        Assert.Null(SshNetRunner.NormalizeFingerprint(input));
+    }
+
+    [Fact]
+    public void FingerprintsEqual_MatchAndMismatch()
+    {
+        Assert.True(SshNetRunner.FingerprintsEqual("abc123", "abc123"));
+        Assert.False(SshNetRunner.FingerprintsEqual("abc123", "abc124"));
+        Assert.False(SshNetRunner.FingerprintsEqual("abc123", "abc123x")); // different length
+    }
+}
 
 public class SshConfigTests : IDisposable
 {

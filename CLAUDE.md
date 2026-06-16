@@ -67,6 +67,11 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   `privateKeyPwdEnc` (passphrase that unlocks the private key at `keyPath`) and `passwordEnc`
   (username/password basic auth). Key auth is offered first. `keyPath` resolves **relative to the
   directory of the loaded `ssh-config.json`**.
+- **SSH host-key verification** (anti-MITM): SSH.NET does not verify host keys by default, so
+  `SshNetRunner` registers a `HostKeyReceived` handler. `hostKeyFingerprint` (SHA-256, base64) pins the
+  server key; when unset it is **trust-on-first-use** — the first connection's key is learned and written
+  back to `ssh-config.json`, and later connections are rejected on mismatch with a clear error. Pure
+  helpers `NormalizeFingerprint` / `FingerprintsEqual` are unit-tested; the event wiring is integration-only.
 - **Secrets**: `SshConfigProtector` uses AES-256-GCM with a random key in a sibling `ssh-config.key`
   (`0600` on Unix). Never commit `ssh-config.key`, `id_rsa`, `*.pem`, `*.key` — they are gitignored.
   Set secrets via the `--set-key-password` / `--set-ssh-password` verbs, not by hand.

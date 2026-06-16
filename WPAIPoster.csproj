@@ -14,6 +14,9 @@
         <Content Remove="WPAIPoster.Tests/**" />
         <None Remove="WPAIPoster.Tests/**" />
         <EmbeddedResource Remove="WPAIPoster.Tests/**" />
+        <None Update="ssh-config-example.json">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
 
     <ItemGroup>

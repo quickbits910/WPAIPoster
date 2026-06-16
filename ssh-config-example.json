@@ -1,0 +1,8 @@
+{
+  "server": "abc.efg.net",
+  "port": 3798,
+  "username": "abc",
+  "keyPath": "../../../../id_rsa",
+  "privateKeyPwdEnc": "encryptedpasswordgoeshere",
+  "hostKeyFingerprint": null
+}

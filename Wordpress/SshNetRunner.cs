@@ -1,4 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Cryptography;
+using System.Text;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 using Renci.SshNet.Security;
@@ -63,19 +65,105 @@ public sealed class SshNetRunner : ISshRunner
             return ci;
         }
 
+        // Host-key verification (anti-MITM): reject the connection unless the server's key matches the
+        // pinned fingerprint; trust-on-first-use when no fingerprint is configured yet.
+        string? expectedFp = NormalizeFingerprint(cfg.HostKeyFingerprint);
+        string? learnedFp = null;
+        (string Expected, string Observed)? mismatch = null;
+
+        void VerifyHostKey(object? _, HostKeyEventArgs e)
+        {
+            string observed = NormalizeFingerprint(e.FingerPrintSHA256) ?? string.Empty;
+            if (expectedFp is null)
+            {
+                learnedFp = observed;          // trust-on-first-use: remember and accept
+                e.CanTrust = true;
+            }
+            else if (FingerprintsEqual(expectedFp, observed))
+            {
+                e.CanTrust = true;
+            }
+            else
+            {
+                e.CanTrust = false;            // reject → Connect throws; surfaced as a clear error below
+                mismatch = (expectedFp, observed);
+            }
+        }
+
+        SshNetRunner ConnectVerified(bool pinned)
+        {
+            var runner = new SshNetRunner(BuildConnInfo(pinned));
+            runner._ssh.HostKeyReceived += VerifyHostKey;
+            runner._sftp.HostKeyReceived += VerifyHostKey;
+            try
+            {
+                runner._ssh.Connect();
+                runner._sftp.Connect();
+                return runner;
+            }
+            catch
+            {
+                runner.Dispose();
+                throw;
+            }
+        }
+
         bool forcePinned = cfg.PinAlgorithms == true;
 
+        SshNetRunner connected;
         try
         {
-            return ConnectWith(BuildConnInfo(forcePinned));
+            try
+            {
+                connected = ConnectVerified(forcePinned);
+            }
+            catch (Exception ex) when (!forcePinned && mismatch is null && ShouldFallBackToPinned(ex))
+            {
+                Console.Error.WriteLine(
+                    $"SSH handshake failed ({ex.Message.Trim()}); retrying with a pinned modern algorithm set...");
+                connected = ConnectVerified(pinned: true);
+            }
         }
-        catch (Exception ex) when (!forcePinned && ShouldFallBackToPinned(ex))
+        catch when (mismatch is not null)
         {
-            Console.Error.WriteLine(
-                $"SSH handshake failed ({ex.Message.Trim()}); retrying with a pinned modern algorithm set...");
-            return ConnectWith(BuildConnInfo(pinned: true));
+            throw new InvalidOperationException(
+                $"SSH host key mismatch — possible man-in-the-middle. Expected SHA256:{mismatch.Value.Expected} " +
+                $"but the server presented SHA256:{mismatch.Value.Observed}. If the server's key legitimately " +
+                "changed, update 'hostKeyFingerprint' in ssh-config.json (or clear it to re-pin).");
         }
+
+        // Trust-on-first-use: persist the freshly-seen fingerprint so later connections are verified.
+        if (expectedFp is null && learnedFp is { Length: > 0 } && cfg.LoadedFrom is { Length: > 0 })
+        {
+            cfg.HostKeyFingerprint = learnedFp;
+            try
+            {
+                cfg.Save(cfg.LoadedFrom);
+                Console.Error.WriteLine(
+                    $"Pinned SSH host key SHA256:{learnedFp} to {cfg.LoadedFrom} (trust-on-first-use).");
+            }
+            catch { /* best-effort; verification still happened this run */ }
+        }
+
+        return connected;
     }
+
+    /// <summary>Strips an optional "SHA256:" prefix, surrounding whitespace, and base64 padding for comparison.</summary>
+    public static string? NormalizeFingerprint(string? fingerprint)
+    {
+        if (string.IsNullOrWhiteSpace(fingerprint))
+            return null;
+
+        string s = fingerprint.Trim();
+        if (s.StartsWith("SHA256:", StringComparison.OrdinalIgnoreCase))
+            s = s["SHA256:".Length..];
+        return s.TrimEnd('=');
+    }
+
+    /// <summary>Constant-time comparison of two already-normalized SHA-256 fingerprints.</summary>
+    public static bool FingerprintsEqual(string expected, string observed)
+        => CryptographicOperations.FixedTimeEquals(
+            Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(observed));
 
     private static PrivateKeyFile? LoadPrivateKey(SshConfig cfg, SshConfigProtector protector)
     {

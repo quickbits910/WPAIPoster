@@ -53,6 +53,14 @@ public sealed class SshConfig
     [JsonPropertyName("pinAlgorithms")]
     public bool? PinAlgorithms { get; set; }
 
+    /// <summary>
+    /// Expected SHA-256 fingerprint of the server's host key (base64, the part after "SHA256:"). When set,
+    /// the connection is rejected unless the server's key matches — preventing MITM. When null, the runner
+    /// pins the key it sees on the first connection (trust-on-first-use) and writes it back here.
+    /// </summary>
+    [JsonPropertyName("hostKeyFingerprint")]
+    public string? HostKeyFingerprint { get; set; }
+
     /// <summary>Resolved port, defaulting to 22 when unset.</summary>
     [JsonIgnore]
     public int EffectivePort => Port is > 0 ? Port.Value : 22;
