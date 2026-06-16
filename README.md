@@ -11,12 +11,14 @@ ask to publish.
 
 1. You give it a short brief (a sentence or two about the post you want).
 2. It reads your site's existing published posts so it can suggest **real internal links**.
-3. The AI writes the post — meta title, meta description, H1, scannable body with H2/H3 sections, and a
-   call to action — and returns it as structured data.
-4. It scans your local **image library**, uses a vision model to score which images best match the post,
-   picks the best few, resizes them under 500 KB, and marks one as the **featured image**.
-5. It connects to your WordPress server over SSH, uploads everything, and creates the post via WP-CLI —
-   draft by default.
+3. The AI writes the post — meta title, meta description, H1, scannable body with H2/H3 sections, a
+   call to action, plus **tags** (up to 5) and **categories** — and returns it as structured data.
+4. It indexes the keyword tags on your local **image library** (XMP / xattr / IPTC, as written by
+   [ImageTagger](https://github.com/quickbits910)), shortlists images whose tags match the post, asks the
+   model to pick the most relevant, then **vision-scores** the shortlist and resizes the winners under 500 KB.
+5. It connects to your WordPress server over SSH (with host-key verification), uploads everything, and
+   creates the post via WP-CLI — draft by default — placing the best image under the H1, the next two under
+   the 2nd and 3rd H2s, and a fourth at the bottom, and applying the tags and categories.
 
 ## Requirements
 
@@ -42,8 +44,12 @@ ask to publish.
   "imageLibrary": "/path/to/your/images/",
   "autoPublish": false,
   "wordPressFolder": "yoursite.com",
-  "maxImagesToScore": 60,
-  "imagesPerPost": 3,
+  "maxImagesToScore": 8,
+  "imagesPerPost": 4,
+  "maxImagesToIndex": 1000,
+  "tagPrefix": "AI.",
+  "tagCandidateLimit": 40,
+  "defaultCategory": "Blog",
   "seoMetaKeys": {
     "title": "_yoast_wpseo_title",
     "description": "_yoast_wpseo_metadesc"
@@ -54,18 +60,29 @@ ask to publish.
 | Setting | Meaning |
 |---|---|
 | `provider` | `lmstudio` (default), `ollama`, `openai`, `openai-compatible`, or `anthropic`. |
-| `model` | Model used to write the post. |
+| `model` | Model used to write the post (and the tag-based image pre-selection). |
 | `visionModel` | Vision-capable model used to score images (falls back to `model`). |
 | `baseUrl` | Endpoint for local/compatible providers. |
 | `apiKey` | Cloud key. Leave `null` and use `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars instead. |
 | `imageLibrary` | Local folder scanned for images. |
 | `autoPublish` | `false` → draft (default). `true` → publish immediately. |
 | `wordPressFolder` | Folder on the server containing the WordPress install (where `wp` runs). |
-| `maxImagesToScore` | Cap on how many library images are sent to the vision model. |
-| `imagesPerPost` | How many images to attach (including the featured one). |
+| `maxImagesToScore` | Cap on how many candidate images are sent to the vision model. |
+| `imagesPerPost` | How many images to place in the post (best under the H1, then under the 2nd/3rd H2, then bottom). |
+| `maxImagesToIndex` | Max library images whose tags are read/indexed for tag matching. |
+| `tagPrefix` | Keyword prefix ImageTagger writes (e.g. `AI.`); stripped before tag matching. |
+| `tagCandidateLimit` | Cap on the tag-matched shortlist sent to the model for image pre-selection. |
+| `defaultCategory` | Category applied when the model returns none (default `Blog`). |
 | `seoMetaKeys` | Post-meta keys for your SEO plugin (defaults to Yoast). Set to `null` to skip. |
 
 ### 2. Configure SSH — `ssh-config.json`
+
+`ssh-config.json` is **gitignored** (it holds your real connection details), so it isn't in the repo.
+Copy the tracked template and fill it in:
+
+```bash
+cp ssh-config-example.json ssh-config.json
+```
 
 ```json
 {
@@ -74,7 +91,8 @@ ask to publish.
   "username": "you",
   "keyPath": "../id_rsa",
   "privateKeyPwdEnc": null,
-  "passwordEnc": null
+  "passwordEnc": null,
+  "hostKeyFingerprint": null
 }
 ```
 
@@ -90,10 +108,16 @@ ask to publish.
     dotnet run --project WPAIPoster.csproj -- --set-ssh-password
     ```
     This stores it as `passwordEnc`.
+- `hostKeyFingerprint` pins the server's **SHA-256 host-key fingerprint** to prevent
+  man-in-the-middle attacks. Leave it `null` and the first connection **trusts-on-first-use** —
+  the key it sees is recorded back into `ssh-config.json`, and every later connection is rejected
+  with a clear error if the server's key changes. To pin up front instead, paste the value from
+  `ssh-keygen -lf <host_key>` / `ssh -v` (the part after `SHA256:`).
 
 Secrets are encrypted with **AES-256-GCM** using a key kept in a local `ssh-config.key` file
-(permissions `0600` on macOS/Linux). That key file — along with `id_rsa` and other key material — is
-gitignored and must never be committed.
+(permissions `0600` on macOS/Linux). That key file — along with `ssh-config.json`, `id_rsa`, and other
+key material — is gitignored and must never be committed. Optional overrides: `pinAlgorithms: true`
+forces a modern-only handshake (curve25519 / aes256-gcm / ed25519); see `ssh-config-example.json`.
 
 ## Usage
 
@@ -137,8 +161,15 @@ The app runs standard WP-CLI commands in your `wordPressFolder`:
 - `wp post create <file> --post_status=draft|publish --post_excerpt=… --porcelain` — the post body is
   uploaded as a file (via SFTP) and passed to WP-CLI, so HTML is never mangled by shell escaping.
 - `wp post meta update …` — writes the SEO meta title/description (if `seoMetaKeys` is set).
+- `wp term create <taxonomy> <name> --porcelain` then `wp post term set <id> post_tag|category <ids> --by=id`
+  — resolves each tag/category to a term ID (creating it if missing) and assigns them. Tags are capped at 5;
+  categories default to `defaultCategory` when the model returns none.
 - `wp media import <file> --post_id=… [--featured_image] --porcelain` — uploads each image and attaches it.
-- `wp post update <id> <file>` — re-saves the body with the uploaded image URLs embedded inline.
+- `wp post update <id> <file>` — re-saves the body with the uploaded images embedded at structural
+  positions (best under the H1, next two under the 2nd/3rd H2s, fourth at the bottom).
+
+All values that reach the shell go through single-quote escaping; post content and images are transferred
+as files via SFTP rather than inlined into commands.
 
 ## Development
 
@@ -152,6 +183,8 @@ server (see `WPAIPoster.Tests/`). For deeper architectural notes, see [`CLAUDE.m
 ## Notes & limitations
 
 - Video upload isn't implemented yet (images only).
-- The post structure (meta title/description, H1, H2/H3 flow, CTA, internal links, image themes) is
-  produced as structured JSON by the model and assembled deterministically by the app.
+- The post structure (meta title/description, H1, H2/H3 flow, CTA, internal links, image themes, tags,
+  categories) is produced as structured JSON by the model and assembled deterministically by the app.
+- SSH uses host-key verification (pin or trust-on-first-use); the first connection to a new server pins
+  its key into `ssh-config.json`.
 - Tested against a fake SSH runner; a real end-to-end run needs your server and WP-CLI configured.
