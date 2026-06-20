@@ -25,7 +25,7 @@
     "3. H1: a post title relevant to the content.",
     "4. Introduction: 2-3 sentences that hook the reader by identifying a core problem they face.",
     "5. Subheadings: use <h2> for main sections and <h3> for sub-points. Follow the flow: Problem > Solution > Implementation > Results.",
-    "6. Body: short scannable paragraphs, <strong> for emphasis, primary keyword integrated naturally. Aim for 5-6 paragraphs.",
+    "6. Body: short scannable paragraphs, <strong> for emphasis, primary keyword integrated naturally. Aim for 7 to 10 paragraphs.",
     "7. Internal links: propose 1-2 links to the existing posts listed above, with natural anchor text and the exact URL from the list.",
     "8. Call to Action: end with a specific, actionable CTA.",
     "9. Image themes: list 3-5 visual subjects for images. For EACH, provide two fields: a 'subject' — a short, taggable noun (1-2 words, e.g. 'network', 'tree', 'coffee') used to match a local image library by keyword; and a 'description' — a specific phrase that disambiguates exactly what the image should depict (e.g. subject 'network' → description 'interconnected computer network with servers and cables', subject 'tree' → description 'binary tree / graph data-structure diagram'). Make the subjects DISTINCT and visually varied (avoid near-synonyms) so each illustrates a different part of the post.",
