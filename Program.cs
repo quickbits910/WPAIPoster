@@ -104,9 +104,14 @@ try
     string existingText = ExistingPostsFetcher.FormatForPrompt(existing);
 
     // 2. Generate the post (optionally gated by the Editor reviewer, which drives rewrites).
+    // URLs in the brief must survive into the final post — pass them to the model, guarantee them later.
+    IReadOnlyList<string> briefLinks = BriefLinks.ExtractUrls(brief);
+    if (briefLinks.Count > 0)
+        Console.WriteLine($"Found {briefLinks.Count} source link(s) in the brief to carry through.");
+
     Console.WriteLine("Generating blog post...");
     var generator = BlogPostGenerator.Create(textClient);
-    BlogPostResult post = await generator.GenerateAsync(brief, existingText);
+    BlogPostResult post = await generator.GenerateAsync(brief, existingText, sourceLinks: briefLinks);
 
     if (settings.EnableEditorReviewer ?? false)
     {
@@ -131,7 +136,7 @@ try
             Console.WriteLine("Editor requested a rewrite. Feedback:");
             Console.WriteLine($"  {review.Feedback}");
             Console.WriteLine($"Rewriting blog post (attempt {rewrite + 1}/{AppLimits.MaxEditorRevisions})...");
-            post = await generator.GenerateAsync(brief, existingText, review.Feedback);
+            post = await generator.GenerateAsync(brief, existingText, review.Feedback, briefLinks);
             review = await reviewer.ReviewAsync(brief, post);
         }
 
@@ -140,6 +145,17 @@ try
                 ? $"Editor approved the draft (score {review.Score:0.00})."
                 : $"Editor still below threshold (score {review.Score:0.00}) after {AppLimits.MaxEditorRevisions} rewrite(s); proceeding with the best draft.");
     }
+
+    // Guarantee every brief URL made it into the body (append a Sources list for any the model dropped).
+    string ensuredBody = BriefLinks.EnsureLinksPresent(post.BodyHtml, briefLinks);
+    if (!ReferenceEquals(ensuredBody, post.BodyHtml))
+    {
+        post.BodyHtml = ensuredBody;
+        Console.WriteLine("Added a Sources section for brief link(s) the model did not include.");
+    }
+
+    // Links to other sites should open in a new tab; internal links (this blog's domain) stay in-tab.
+    post.BodyHtml = ExternalLinks.MarkExternalLinksNewTab(post.BodyHtml, settings.WordPressFolder);
 
     PrintPost(post);
 
@@ -161,7 +177,7 @@ try
         // 3b. Top up with newest images, then vision-score the candidate set against the themes.
         IReadOnlyList<string> candidates = CandidateSet.Build(tagPicked, catalog.NewestPaths, maxImagesToScore);
         Console.WriteLine($"Vision-scoring {candidates.Count} candidate(s) against themes: " +
-                          $"{string.Join(", ", post.ImageThemes.Select(t => t.Subject))}");
+                          $"{string.Join(", ", post.ImageThemes.Select(t => $"{t.Subject} ({t.Description})"))}");
 
         var selected = await ImageRelevanceSelector.Create(visionClient).SelectAsync(
             candidates, post.ImageThemes, post.H1, post.MetaDescription,

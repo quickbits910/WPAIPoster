@@ -15,15 +15,21 @@ public sealed class BlogPostGenerator(ILlmClient client, string promptTemplate)
     /// an instruction to address them.
     /// </summary>
     public static string BuildPrompt(
-        string template, string userInput, string existingPostsText, string? editorFeedback = null)
+        string template, string userInput, string existingPostsText, string? editorFeedback = null,
+        IReadOnlyList<string>? sourceLinks = null)
     {
         string posts = string.IsNullOrWhiteSpace(existingPostsText)
             ? "(none available)"
             : existingPostsText;
 
+        string links = sourceLinks is { Count: > 0 }
+            ? string.Join("\n", sourceLinks.Select(u => $"- {u}"))
+            : "(none)";
+
         string prompt = template
             .Replace("{USER_INPUT}", userInput)
-            .Replace("{EXISTING_POSTS}", posts);
+            .Replace("{EXISTING_POSTS}", posts)
+            .Replace("{SOURCE_LINKS}", links);
 
         if (!string.IsNullOrWhiteSpace(editorFeedback))
             prompt += "\n\n--- Editor revision notes (this is a rewrite; address ALL of these) ---\n"
@@ -41,9 +47,10 @@ public sealed class BlogPostGenerator(ILlmClient client, string promptTemplate)
     /// <paramref name="editorFeedback"/> to request a rewrite that addresses the Editor's notes.
     /// </summary>
     public async Task<BlogPostResult> GenerateAsync(
-        string userInput, string existingPostsText, string? editorFeedback = null)
+        string userInput, string existingPostsText, string? editorFeedback = null,
+        IReadOnlyList<string>? sourceLinks = null)
     {
-        string prompt = BuildPrompt(promptTemplate, userInput, existingPostsText, editorFeedback);
+        string prompt = BuildPrompt(promptTemplate, userInput, existingPostsText, editorFeedback, sourceLinks);
         string? raw = await client.SendAsync(prompt, null, null);
         return BlogPostParser.Parse(raw);
     }
