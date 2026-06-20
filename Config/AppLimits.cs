@@ -26,6 +26,12 @@ public static class AppLimits
     /// <summary>Default cap on the tag-matched shortlist sent to the tag-selection model.</summary>
     public const int DefaultTagCandidateLimit = 40;
 
+    /// <summary>
+    /// Default max Hamming distance (over the 64-bit perceptual dHash) at which two images are treated
+    /// as near-identical and not both selected. ~0-6 ≈ visually the same image.
+    /// </summary>
+    public const int DefaultImageDedupThreshold = 6;
+
     /// <summary>Maximum number of post tags applied to a published post.</summary>
     public const int MaxPostTags = 5;
 

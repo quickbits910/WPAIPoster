@@ -97,9 +97,15 @@ public static class BlogPostParser
             switch (c)
             {
                 case '\\':
-                    // Copy an existing escape sequence (backslash + following char) verbatim.
-                    sb.Append(c);
-                    if (i + 1 < json.Length) sb.Append(json[++i]);
+                    char next = i + 1 < json.Length ? json[i + 1] : '\0';
+                    if (IsValidEscape(next))
+                    {
+                        // Genuine escape sequence — copy backslash + escape char verbatim.
+                        sb.Append(c).Append(next);
+                        i++;
+                    }
+                    // Otherwise the backslash is a bogus escape the model invented (e.g. \' or \%);
+                    // drop it and let the following char be processed normally on the next iteration.
                     break;
                 case '"':
                     if (IsStringEnd(json, i))
@@ -124,6 +130,10 @@ public static class BlogPostParser
 
         return sb.ToString();
     }
+
+    /// <summary>The characters that legally follow a backslash inside a JSON string.</summary>
+    private static bool IsValidEscape(char c)
+        => c is '"' or '\\' or '/' or 'b' or 'f' or 'n' or 'r' or 't' or 'u';
 
     /// <summary>True if the quote at <paramref name="quoteIndex"/> looks like a string terminator.</summary>
     private static bool IsStringEnd(string s, int quoteIndex)

@@ -80,6 +80,7 @@ int maxImagesToScore = settings.MaxImagesToScore ?? AppLimits.DefaultMaxImagesTo
 int maxImagesToIndex = settings.MaxImagesToIndex ?? AppLimits.DefaultMaxImagesToIndex;
 string tagPrefix = settings.TagPrefix ?? AppLimits.DefaultTagPrefix;
 int tagCandidateLimit = settings.TagCandidateLimit ?? AppLimits.DefaultTagCandidateLimit;
+int imageDedupThreshold = settings.ImageDedupThreshold ?? AppLimits.DefaultImageDedupThreshold;
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
 ILlmClient textClient = LlmClientFactory.Create(http, settings.Provider, settings.Model, settings.BaseUrl, settings.ApiKey);
@@ -127,11 +128,11 @@ try
                           $"{string.Join(", ", post.ImageThemes)}");
 
         var selected = await ImageRelevanceSelector.Create(visionClient).SelectAsync(
-            candidates, post.ImageThemes, imagesPerPost,
+            candidates, post.ImageThemes, imagesPerPost, imageDedupThreshold,
             onScored: (i, total, name, score) => Console.WriteLine(
                 double.IsNaN(score)
                     ? $"  [{i}/{total}] {name} — skipped (unreadable)"
-                    : $"  [{i}/{total}] {name} — relevance {score:0.00}"));
+                    : $"  [{i}/{total}] {name} — best-theme relevance {score:0.00}"));
 
         Console.WriteLine($"Selected {selected.Count} image(s):");
         foreach (SelectedImage img in selected)

@@ -76,6 +76,13 @@ public sealed class AppSettings
     [JsonPropertyName("tagCandidateLimit")]
     public int? TagCandidateLimit { get; set; }
 
+    /// <summary>
+    /// Max perceptual-hash Hamming distance at which two selected images are treated as near-duplicates
+    /// and not both attached. Higher = more aggressive dedup. Null uses the default (6).
+    /// </summary>
+    [JsonPropertyName("imageDedupThreshold")]
+    public int? ImageDedupThreshold { get; set; }
+
     /// <summary>Category applied when the model returns none. Null uses the default ("Blog").</summary>
     [JsonPropertyName("defaultCategory")]
     public string? DefaultCategory { get; set; }

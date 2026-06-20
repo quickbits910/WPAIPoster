@@ -118,6 +118,28 @@ public class BlogPostParserTests
     }
 
     [Fact]
+    public void Parse_RepairsBogusBackslashEscapesInBody()
+    {
+        // The model "escaped" single quotes as \' which is not a valid JSON escape; repair drops the backslash.
+        const string raw = """{ "h1": "H", "bodyHtml": "<p>It\'s <a href=\'/x\'>here</a>.</p>" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("H", post.H1);
+        Assert.Contains("It's", post.BodyHtml);
+        Assert.Contains("href='/x'", post.BodyHtml);
+    }
+
+    [Fact]
+    public void Parse_PreservesValidEscapesInBody()
+    {
+        // A valid \" and \n must survive the repair pass intact.
+        const string raw = """{ "h1": "H", "bodyHtml": "<p>A \"quote\" and a break.</p>" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("A \"quote\" and a break.", post.BodyHtml);
+    }
+
+    [Fact]
     public void Parse_RepairsRawNewlinesInBody()
     {
         // A literal newline inside a string value is invalid JSON; the repair pass escapes it.

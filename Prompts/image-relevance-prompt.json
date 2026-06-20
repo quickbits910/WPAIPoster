@@ -1,9 +1,9 @@
 {
   "prompt": [
-    "You are scoring how well a single image matches a blog post topic.",
-    "The post is about the following themes: {IMAGE_THEMES}",
-    "Look at the attached image and judge how relevant it is to those themes for use as an illustration in the post.",
-    "Respond with ONLY a single number between 0 and 1 (e.g. 0.0, 0.35, 0.9). Do not add any words, punctuation, or explanation.",
-    "0 = not relevant at all, 1 = perfectly relevant."
+    "You are scoring how well a single image matches each theme of a blog post.",
+    "Score the attached image against EACH of the following numbered themes, judging how relevant it is as an illustration for that specific theme:",
+    "{IMAGE_THEMES}",
+    "Respond with ONLY a JSON array of numbers between 0 and 1 — one score per theme, in the same order as listed above (e.g. [0.0, 0.8, 0.3]).",
+    "Do not add any words, keys, punctuation, or explanation. 0 = not relevant at all, 1 = perfectly relevant."
   ]
 }
