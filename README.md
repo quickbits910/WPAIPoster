@@ -9,14 +9,23 @@ ask to publish.
 
 ## What it does
 
-1. You give it a short brief (a sentence or two about the post you want).
+1. You give it a short brief (a sentence or two about the post you want). You can paste a multi-line
+   brief at the prompt and finish with **Ctrl-D**.
 2. It reads your site's existing published posts so it can suggest **real internal links**.
 3. The AI writes the post — meta title, meta description, H1, scannable body with H2/H3 sections, a
-   call to action, plus **tags** (up to 5) and **categories** — and returns it as structured data.
-4. It indexes the keyword tags on your local **image library** (XMP / xattr / IPTC, as written by
-   [ImageTagger](https://github.com/quickbits910)), shortlists images whose tags match the post, asks the
-   model to pick the most relevant, then **vision-scores** the shortlist and resizes the winners under 500 KB.
-5. It connects to your WordPress server over SSH (with host-key verification), uploads everything, and
+   call to action, plus **tags** (up to 5), **categories**, and **image themes** — and returns it as
+   structured data.
+4. *(Optional)* An **Editor reviewer** LLM critically scores the draft for publish-readiness. If it
+   scores below your quality threshold, the post is **rewritten** with the editor's feedback (clarity of
+   audience, why-it-matters, the main takeaway, flow and style) — up to two rounds. Off by default.
+5. It indexes the keyword tags on your local **image library** (XMP / xattr / IPTC, as written by
+   [ImageTagger](https://github.com/quickbits910)) and shortlists images whose tags match the post. Each
+   image theme carries a short **subject** (for tag matching) and a richer **description** (for the vision
+   model). It then **vision-scores** each shortlisted image against *every* theme in one call — using the
+   post's title/summary as context — and assigns the best **distinct** image to each theme, skipping
+   near-identical duplicates (perceptual hash) and anything below a relevance floor, then resizes the
+   winners under 500 KB.
+6. It connects to your WordPress server over SSH (with host-key verification), uploads everything, and
    creates the post via WP-CLI — draft by default — placing the best image under the H1, the next two under
    the 2nd and 3rd H2s, and a fourth at the bottom, and applying the tags and categories.
 
@@ -49,7 +58,11 @@ ask to publish.
   "maxImagesToIndex": 1000,
   "tagPrefix": "AI.",
   "tagCandidateLimit": 40,
+  "imageDedupThreshold": 6,
+  "minImageRelevance": 0.0,
   "defaultCategory": "Blog",
+  "enableEditorReviewer": false,
+  "editorReviewerThreshold": 0.8,
   "seoMetaKeys": {
     "title": "_yoast_wpseo_title",
     "description": "_yoast_wpseo_metadesc"
@@ -72,7 +85,11 @@ ask to publish.
 | `maxImagesToIndex` | Max library images whose tags are read/indexed for tag matching. |
 | `tagPrefix` | Keyword prefix ImageTagger writes (e.g. `AI.`); stripped before tag matching. |
 | `tagCandidateLimit` | Cap on the tag-matched shortlist sent to the model for image pre-selection. |
+| `imageDedupThreshold` | Max perceptual-hash Hamming distance at which two selected images count as near-duplicates (default `6`; higher = more aggressive dedup). |
+| `minImageRelevance` | Minimum vision score (`0.00`–`1.00`) an image must exceed to be attached; images at/below are never used to pad a theme (default `0.0`, drops only zero-scoring images). |
 | `defaultCategory` | Category applied when the model returns none (default `Blog`). |
+| `enableEditorReviewer` | `true` → an Editor LLM scores the draft and drives rewrites; `false` (default) skips review. |
+| `editorReviewerThreshold` | Minimum Editor score (`0.00`–`1.00`) a draft must reach to be accepted without a rewrite (default `0.80`). |
 | `seoMetaKeys` | Post-meta keys for your SEO plugin (defaults to Yoast). Set to `null` to skip. |
 
 ### 2. Configure SSH — `ssh-config.json`
@@ -138,7 +155,8 @@ dotnet run --project WPAIPoster.csproj -- --draft "Draft this one"
 dotnet run --project WPAIPoster.csproj -- --no-images "Text-only announcement post"
 ```
 
-If you don't pass a brief on the command line, the app prompts you for one.
+If you don't pass a brief on the command line, the app prompts you for one. You can paste multiple
+lines (the whole brief, tables, code, etc.) and finish input with **Ctrl-D** on an empty line.
 
 ### Options
 
