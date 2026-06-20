@@ -83,9 +83,24 @@ public sealed class AppSettings
     [JsonPropertyName("imageDedupThreshold")]
     public int? ImageDedupThreshold { get; set; }
 
+    /// <summary>
+    /// Minimum vision relevance score [0.00-1.00] an image must exceed to be attached. Images at or below
+    /// this are never selected. Null uses the default (0.0, which drops only zero-scoring images).
+    /// </summary>
+    [JsonPropertyName("minImageRelevance")]
+    public double? MinImageRelevance { get; set; }
+
     /// <summary>Category applied when the model returns none. Null uses the default ("Blog").</summary>
     [JsonPropertyName("defaultCategory")]
     public string? DefaultCategory { get; set; }
+
+    /// <summary>When true, an Editor LLM scores the draft and drives rewrites below the threshold. Default false.</summary>
+    [JsonPropertyName("enableEditorReviewer")]
+    public bool? EnableEditorReviewer { get; set; }
+
+    /// <summary>Minimum Editor score [0.00-1.00] a draft must reach to be accepted. Null uses the default (0.80).</summary>
+    [JsonPropertyName("editorReviewerThreshold")]
+    public double? EditorReviewerThreshold { get; set; }
 
     /// <summary>Optional SEO plugin meta keys for writing the SEO meta title/description.</summary>
     [JsonPropertyName("seoMetaKeys")]

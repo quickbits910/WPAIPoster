@@ -25,7 +25,8 @@ public sealed class TagBasedImageSelector(ILlmClient client, string promptTempla
     public async Task<IReadOnlyList<string>> SelectAsync(
         ImageTagCatalog catalog, BlogPostResult post, int candidateLimit)
     {
-        IReadOnlyCollection<string> tokens = TagMatcher.Tokenize(post.H1, post.BodyHtml, post.ImageThemes);
+        IReadOnlyCollection<string> tokens =
+            TagMatcher.Tokenize(post.H1, post.BodyHtml, post.ImageThemes.Select(t => t.Subject));
         IReadOnlyList<TaggedImage> candidates = TagMatcher.Rank(catalog, tokens, candidateLimit);
         if (candidates.Count == 0)
             return Array.Empty<string>();
@@ -49,7 +50,7 @@ public sealed class TagBasedImageSelector(ILlmClient client, string promptTempla
 
         return template
             .Replace("{TITLE}", post.H1)
-            .Replace("{IMAGE_THEMES}", string.Join(", ", post.ImageThemes))
+            .Replace("{IMAGE_THEMES}", string.Join(", ", post.ImageThemes.Select(t => t.Subject)))
             .Replace("{BODY}", BodyContext(post.BodyHtml))
             .Replace("{TAGGED_IMAGES}", list.ToString().TrimEnd());
     }

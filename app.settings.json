@@ -13,7 +13,10 @@
   "tagPrefix": "AI.",
   "tagCandidateLimit": 40,
   "imageDedupThreshold": 6,
+  "minImageRelevance": 0.0,
   "defaultCategory": "Blog",
+  "enableEditorReviewer": false,
+  "editorReviewerThreshold": 0.8,
   "seoMetaKeys": {
     "title": "_yoast_wpseo_title",
     "description": "_yoast_wpseo_metadesc"

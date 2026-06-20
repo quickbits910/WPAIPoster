@@ -165,9 +165,11 @@ public static class BlogPostParser
 
         if (r.ImageThemes.Count == 0)
         {
-            List<string>? themes = FindStringList(root, "imagethemes", "themes", "imagekeywords", "keywords");
+            // Fallback for alternate key names that arrive as a plain string list (the primary
+            // "imageThemes" object/string form is handled by ImageThemeListConverter during deserialize).
+            List<string>? themes = FindStringList(root, "themes", "imagekeywords", "keywords");
             if (themes is { Count: > 0 })
-                r.ImageThemes = themes;
+                r.ImageThemes = themes.Select(t => new ImageTheme(t, t)).ToList();
         }
 
         if (r.Tags.Count == 0)

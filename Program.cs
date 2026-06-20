@@ -81,6 +81,7 @@ int maxImagesToIndex = settings.MaxImagesToIndex ?? AppLimits.DefaultMaxImagesTo
 string tagPrefix = settings.TagPrefix ?? AppLimits.DefaultTagPrefix;
 int tagCandidateLimit = settings.TagCandidateLimit ?? AppLimits.DefaultTagCandidateLimit;
 int imageDedupThreshold = settings.ImageDedupThreshold ?? AppLimits.DefaultImageDedupThreshold;
+double minImageRelevance = settings.MinImageRelevance ?? AppLimits.DefaultMinImageRelevance;
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
 ILlmClient textClient = LlmClientFactory.Create(http, settings.Provider, settings.Model, settings.BaseUrl, settings.ApiKey);
@@ -102,9 +103,44 @@ try
     Console.WriteLine($"Found {existing.Count} published post(s) for internal-link context.");
     string existingText = ExistingPostsFetcher.FormatForPrompt(existing);
 
-    // 2. Generate the post.
+    // 2. Generate the post (optionally gated by the Editor reviewer, which drives rewrites).
     Console.WriteLine("Generating blog post...");
-    BlogPostResult post = await BlogPostGenerator.Create(textClient).GenerateAsync(brief, existingText);
+    var generator = BlogPostGenerator.Create(textClient);
+    BlogPostResult post = await generator.GenerateAsync(brief, existingText);
+
+    if (settings.EnableEditorReviewer ?? false)
+    {
+        double threshold = settings.EditorReviewerThreshold ?? AppLimits.DefaultEditorReviewerThreshold;
+        var reviewer = EditorReviewer.Create(textClient);
+
+        Console.WriteLine("Editor reviewing draft...");
+        EditorReview review = await reviewer.ReviewAsync(brief, post);
+
+        for (int rewrite = 0; rewrite < AppLimits.MaxEditorRevisions; rewrite++)
+        {
+            if (review.IsUnscored)
+            {
+                Console.WriteLine("Editor review could not be parsed — accepting the draft.");
+                break;
+            }
+
+            Console.WriteLine($"Editor score: {review.Score:0.00} (threshold {threshold:0.00}).");
+            if (review.Score >= threshold)
+                break;
+
+            Console.WriteLine("Editor requested a rewrite. Feedback:");
+            Console.WriteLine($"  {review.Feedback}");
+            Console.WriteLine($"Rewriting blog post (attempt {rewrite + 1}/{AppLimits.MaxEditorRevisions})...");
+            post = await generator.GenerateAsync(brief, existingText, review.Feedback);
+            review = await reviewer.ReviewAsync(brief, post);
+        }
+
+        if (!review.IsUnscored)
+            Console.WriteLine(review.Score >= threshold
+                ? $"Editor approved the draft (score {review.Score:0.00})."
+                : $"Editor still below threshold (score {review.Score:0.00}) after {AppLimits.MaxEditorRevisions} rewrite(s); proceeding with the best draft.");
+    }
+
     PrintPost(post);
 
     // 3. Select + prepare images.
@@ -125,14 +161,15 @@ try
         // 3b. Top up with newest images, then vision-score the candidate set against the themes.
         IReadOnlyList<string> candidates = CandidateSet.Build(tagPicked, catalog.NewestPaths, maxImagesToScore);
         Console.WriteLine($"Vision-scoring {candidates.Count} candidate(s) against themes: " +
-                          $"{string.Join(", ", post.ImageThemes)}");
+                          $"{string.Join(", ", post.ImageThemes.Select(t => t.Subject))}");
 
         var selected = await ImageRelevanceSelector.Create(visionClient).SelectAsync(
-            candidates, post.ImageThemes, imagesPerPost, imageDedupThreshold,
-            onScored: (i, total, name, score) => Console.WriteLine(
+            candidates, post.ImageThemes, post.H1, post.MetaDescription,
+            imagesPerPost, imageDedupThreshold, minImageRelevance,
+            onScored: (i, total, name, score, theme) => Console.WriteLine(
                 double.IsNaN(score)
                     ? $"  [{i}/{total}] {name} — skipped (unreadable)"
-                    : $"  [{i}/{total}] {name} — best-theme relevance {score:0.00}"));
+                    : $"  [{i}/{total}] {name} — relevance {score:0.00} (best theme: {theme})"));
 
         Console.WriteLine($"Selected {selected.Count} image(s):");
         foreach (SelectedImage img in selected)
@@ -141,8 +178,9 @@ try
             long size = ImagePreparer.PrepareForUpload(img.Path, dest);
             tempImages.Add(dest);
             prepared.Add(img with { Path = dest });
+            string themeNote = string.IsNullOrEmpty(img.Theme) ? "" : $", theme: {img.Theme}";
             Console.WriteLine($"  {(img.IsFeatured ? "★ featured " : "  ")}{Path.GetFileName(img.Path)} " +
-                              $"(score {img.Score:0.00}, prepared {size / 1024}KB)");
+                              $"(score {img.Score:0.00}{themeNote}, prepared {size / 1024}KB)");
         }
     }
 
@@ -201,7 +239,7 @@ static void PrintPost(BlogPostResult post)
     Console.WriteLine($"Meta Description: {post.MetaDescription}");
     Console.WriteLine($"H1:               {post.H1}");
     if (post.ImageThemes.Count > 0)
-        Console.WriteLine($"Image Themes:     {string.Join(", ", post.ImageThemes)}");
+        Console.WriteLine($"Image Themes:     {string.Join("; ", post.ImageThemes.Select(t => $"{t.Subject} — {t.Description}"))}");
     if (post.Tags.Count > 0)
         Console.WriteLine($"Tags:             {string.Join(", ", post.Tags.Take(AppLimits.MaxPostTags))}");
     if (post.Categories.Count > 0)

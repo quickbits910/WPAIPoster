@@ -85,7 +85,33 @@ public class BlogPostParserTests
             { "h1": "H", "bodyHtml": "<p>x</p>", "themes": ["a", "b"] }
             """);
 
-        Assert.Equal(new[] { "a", "b" }, post.ImageThemes);
+        Assert.Equal(new[] { "a", "b" }, post.ImageThemes.Select(t => t.Subject));
+        Assert.Equal(new[] { "a", "b" }, post.ImageThemes.Select(t => t.Description)); // string falls back to both
+    }
+
+    [Fact]
+    public void Parse_ImageThemes_AsObjects_ReadsSubjectAndDescription()
+    {
+        var post = BlogPostParser.Parse("""
+            { "h1": "H", "bodyHtml": "<p>x</p>", "imageThemes": [
+              { "subject": "network", "description": "interconnected computer network" },
+              { "subject": "tree" }
+            ] }
+            """);
+
+        Assert.Equal(new[] { "network", "tree" }, post.ImageThemes.Select(t => t.Subject));
+        Assert.Equal("interconnected computer network", post.ImageThemes[0].Description);
+        Assert.Equal("tree", post.ImageThemes[1].Description); // missing description falls back to subject
+    }
+
+    [Fact]
+    public void Parse_ImageThemes_AsStrings_StillWorks()
+    {
+        var post = BlogPostParser.Parse("""
+            { "h1": "H", "bodyHtml": "<p>x</p>", "imageThemes": ["speed", "dashboard"] }
+            """);
+
+        Assert.Equal(new[] { "speed", "dashboard" }, post.ImageThemes.Select(t => t.Subject));
     }
 
     [Fact]
@@ -197,5 +223,123 @@ public class BlogPostGeneratorTests
         Assert.Single(fake.Prompts);
         Assert.Contains("write about cats", fake.Prompts[0]);
         Assert.Contains("https://p", fake.Prompts[0]);
+    }
+
+    [Fact]
+    public void BuildPrompt_WithEditorFeedback_AppendsRevisionNotes()
+    {
+        string result = BlogPostGenerator.BuildPrompt(
+            "Brief: {USER_INPUT}", "x", "", editorFeedback: "Sharpen the takeaway.");
+
+        Assert.Contains("Editor revision notes", result);
+        Assert.Contains("Sharpen the takeaway.", result);
+    }
+
+    [Fact]
+    public void BuildPrompt_WithoutFeedback_HasNoRevisionNotes()
+    {
+        string result = BlogPostGenerator.BuildPrompt("Brief: {USER_INPUT}", "x", "");
+        Assert.DoesNotContain("Editor revision notes", result);
+    }
+}
+
+public class EditorReviewerTests
+{
+    private static BlogPostResult Draft() => new()
+    {
+        MetaTitle = "Meta T",
+        MetaDescription = "Meta D",
+        H1 = "Headline",
+        BodyHtml = "<p>Body content.</p>",
+        Cta = "Subscribe.",
+    };
+
+    [Fact]
+    public void BuildPrompt_SubstitutesAllTokens()
+    {
+        const string template =
+            "Brief: {USER_INPUT} | {META_TITLE} | {META_DESCRIPTION} | {H1} | {BODY} | {CTA}";
+
+        string result = EditorReviewer.BuildPrompt(template, "write about cats", Draft());
+
+        Assert.Contains("write about cats", result);
+        Assert.Contains("Meta T", result);
+        Assert.Contains("Meta D", result);
+        Assert.Contains("Headline", result);
+        Assert.Contains("<p>Body content.</p>", result);
+        Assert.Contains("Subscribe.", result);
+        Assert.DoesNotContain("{USER_INPUT}", result);
+        Assert.DoesNotContain("{BODY}", result);
+    }
+
+    [Fact]
+    public void ParseReview_CleanJson()
+    {
+        var review = EditorReviewer.ParseReview("""{ "score": 0.85, "feedback": "Tighten the intro." }""");
+
+        Assert.Equal(0.85, review.Score, 3);
+        Assert.Equal("Tighten the intro.", review.Feedback);
+        Assert.False(review.IsUnscored);
+    }
+
+    [Fact]
+    public void ParseReview_FencedAndPivotedProse()
+    {
+        const string raw = "Here is my review:\n```json\n{ \"score\": 0.4, \"feedback\": \"Unclear audience.\" }\n```";
+        var review = EditorReviewer.ParseReview(raw);
+
+        Assert.Equal(0.4, review.Score, 3);
+        Assert.Equal("Unclear audience.", review.Feedback);
+    }
+
+    [Fact]
+    public void ParseReview_ScoreAsString()
+    {
+        var review = EditorReviewer.ParseReview("""{ "score": "0.9", "feedback": "Good." }""");
+        Assert.Equal(0.9, review.Score, 3);
+    }
+
+    [Fact]
+    public void ParseReview_ClampsAboveOne()
+    {
+        var review = EditorReviewer.ParseReview("""{ "score": 1.5, "feedback": "x" }""");
+        Assert.Equal(1.0, review.Score, 3);
+    }
+
+    [Fact]
+    public void ParseReview_RepairsUnescapedQuotesInFeedback()
+    {
+        // Unescaped double-quotes in feedback would break strict JSON; the repair pass recovers it.
+        const string raw = """{ "score": 0.5, "feedback": "Define the term "RAG" up front." }""";
+        var review = EditorReviewer.ParseReview(raw);
+
+        Assert.Equal(0.5, review.Score, 3);
+        Assert.Contains("RAG", review.Feedback);
+    }
+
+    [Theory]
+    [InlineData("""{ "feedback": "no score here" }""")]
+    [InlineData("not json at all")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void ParseReview_Unparseable_IsUnscored(string? raw)
+    {
+        var review = EditorReviewer.ParseReview(raw);
+        Assert.True(review.IsUnscored);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_SendsDraftAndBrief_ReturnsParsedReview()
+    {
+        var fake = new FakeLlmClient("""{ "score": 0.72, "feedback": "Add a clear takeaway." }""");
+        var reviewer = new EditorReviewer(fake, "Brief: {USER_INPUT}\nBody: {BODY}");
+
+        EditorReview review = await reviewer.ReviewAsync("write about cats", Draft());
+
+        Assert.Equal(0.72, review.Score, 3);
+        Assert.Equal("Add a clear takeaway.", review.Feedback);
+        Assert.Single(fake.Prompts);
+        Assert.Contains("write about cats", fake.Prompts[0]);
+        Assert.Contains("<p>Body content.</p>", fake.Prompts[0]);
     }
 }

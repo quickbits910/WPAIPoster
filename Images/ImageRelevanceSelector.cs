@@ -1,14 +1,18 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
 using WPAIPoster.Llm;
 using WPAIPoster.Prompts;
 
 namespace WPAIPoster.Images;
 
-/// <summary>A single image chosen for the post, with its relevance score and featured flag.</summary>
-public sealed record SelectedImage(string Path, double Score, bool IsFeatured);
+/// <summary>
+/// A single image chosen for the post, with its relevance score, featured flag, and the theme it best
+/// matched (the theme it was assigned to, or its strongest theme when used as a fill).
+/// </summary>
+public sealed record SelectedImage(string Path, double Score, bool IsFeatured, string? Theme = null);
 
 /// <summary>A scored candidate: its per-theme relevance scores and perceptual hash.</summary>
 public sealed record ScoredImage(string Path, IReadOnlyList<double> Scores, ulong Hash);
@@ -29,22 +33,27 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
     /// Scores each candidate against every theme (one vision call per image), then returns up to
     /// <paramref name="count"/> diverse images via <see cref="Select"/>. Candidates that fail to
     /// load/score are skipped. <paramref name="onScored"/> is invoked after each image with
-    /// (index, total, fileName, bestThemeScore); a <see cref="double.NaN"/> score signals a skip.
+    /// (index, total, fileName, bestThemeScore, bestThemeName); a <see cref="double.NaN"/> score signals
+    /// a skip (and a null theme name).
     /// </summary>
     public async Task<IReadOnlyList<SelectedImage>> SelectAsync(
         IReadOnlyList<string> candidatePaths,
-        IReadOnlyList<string> imageThemes,
+        IReadOnlyList<ImageTheme> imageThemes,
+        string postTitle,
+        string postSummary,
         int count,
         int hammingThreshold = AppLimits.DefaultImageDedupThreshold,
-        Action<int, int, string, double>? onScored = null)
+        double minRelevance = AppLimits.DefaultMinImageRelevance,
+        Action<int, int, string, double, string?>? onScored = null)
     {
         // With no themes, fall back to a single combined pseudo-theme (legacy single-score behaviour).
-        IReadOnlyList<string> themes = imageThemes.Count > 0
+        IReadOnlyList<ImageTheme> themes = imageThemes.Count > 0
             ? imageThemes
-            : new[] { "the blog post topic" };
+            : new[] { new ImageTheme("the blog post topic", string.IsNullOrWhiteSpace(postTitle) ? "the blog post topic" : postTitle) };
 
-        string prompt = BuildPrompt(promptTemplate, themes);
+        string prompt = BuildPrompt(promptTemplate, themes, postTitle, postSummary);
         int themeCount = themes.Count;
+        var subjects = themes.Select(t => t.Subject).ToList(); // concise labels for display + selection
 
         var scored = new List<ScoredImage>();
         int total = candidatePaths.Count;
@@ -53,6 +62,7 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         {
             string path = candidatePaths[i];
             double best = double.NaN;
+            string? bestTheme = null;
             try
             {
                 var (b64, mime) = ImagePreparer.MakeVisionThumbnailBase64(path);
@@ -60,45 +70,68 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
                 double[] scores = ParseScores(reply, themeCount);
                 ulong hash = PerceptualHash.Compute(path);
                 scored.Add(new ScoredImage(path, scores, hash));
-                best = scores.Length > 0 ? scores.Max() : 0;
+
+                if (scores.Length > 0)
+                {
+                    int bi = 0;
+                    for (int t = 1; t < scores.Length; t++)
+                        if (scores[t] > scores[bi]) bi = t;
+                    best = scores[bi];
+                    bestTheme = subjects[bi];
+                }
+                else
+                {
+                    best = 0;
+                }
             }
             catch
             {
                 // Unreadable/undecodable image — skip it (reported as NaN below).
             }
 
-            onScored?.Invoke(i + 1, total, Path.GetFileName(path), best);
+            onScored?.Invoke(i + 1, total, Path.GetFileName(path), best, bestTheme);
         }
 
-        return Select(scored, themeCount, count, hammingThreshold);
+        return Select(scored, subjects, count, hammingThreshold, minRelevance);
     }
 
-    /// <summary>Builds the scoring prompt, injecting the themes as a numbered list.</summary>
-    public static string BuildPrompt(string template, IReadOnlyList<string> themes)
+    /// <summary>
+    /// Builds the scoring prompt: injects the post title/summary for context and the theme
+    /// <em>descriptions</em> as a numbered list (matching the per-theme score array the model returns).
+    /// </summary>
+    public static string BuildPrompt(
+        string template, IReadOnlyList<ImageTheme> themes, string postTitle, string postSummary)
     {
         var sb = new StringBuilder();
         for (int i = 0; i < themes.Count; i++)
-            sb.Append(i + 1).Append(". ").AppendLine(themes[i]);
-        return template.Replace("{IMAGE_THEMES}", sb.ToString().TrimEnd());
+            sb.Append(i + 1).Append(". ").AppendLine(themes[i].Description);
+
+        return template
+            .Replace("{POST_TITLE}", postTitle ?? string.Empty)
+            .Replace("{POST_SUMMARY}", postSummary ?? string.Empty)
+            .Replace("{IMAGE_THEMES}", sb.ToString().TrimEnd());
     }
 
     /// <summary>
     /// Pure selection step. Assigns the best <em>distinct, non-duplicate</em> image to each theme,
     /// fills remaining slots with the next-best images (by max-across-themes score), and marks the
-    /// single highest-scoring image as featured. Dedup is best-effort: it is relaxed rather than ever
-    /// returning fewer than <c>min(count, candidate count)</c> images.
+    /// single highest-scoring image as featured. Only images scoring strictly above
+    /// <paramref name="minRelevance"/> are ever selected — an irrelevant image is never used to pad a
+    /// theme, so fewer than <paramref name="count"/> images may be returned. Dedup is best-effort:
+    /// it is relaxed (but the relevance floor is not) before the result is allowed to shrink.
     /// </summary>
     public static IReadOnlyList<SelectedImage> Select(
-        IReadOnlyList<ScoredImage> scored, int themeCount, int count, int hammingThreshold)
+        IReadOnlyList<ScoredImage> scored, IReadOnlyList<string> themes, int count, int hammingThreshold,
+        double minRelevance = 0.0)
     {
         count = Math.Max(0, count);
         if (count == 0 || scored.Count == 0)
             return Array.Empty<SelectedImage>();
 
-        int themes = Math.Max(1, themeCount);
-        var chosen = new List<int>();                 // indices into scored, in selection order
+        int themeCount = Math.Max(1, themes.Count);
+        var chosen = new List<(int Img, int Theme)>();   // (image index, winning theme index), in order
         var usedImage = new bool[scored.Count];
-        var coveredTheme = new bool[themes];
+        var coveredTheme = new bool[themeCount];
 
         double ScoreOf(int img, int theme) =>
             theme < scored[img].Scores.Count ? scored[img].Scores[theme] : 0.0;
@@ -106,32 +139,42 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         double MaxScore(int img) =>
             scored[img].Scores.Count > 0 ? scored[img].Scores.Max() : 0.0;
 
-        bool IsDup(int img) =>
-            chosen.Any(c => PerceptualHash.HammingDistance(scored[c].Hash, scored[img].Hash) <= hammingThreshold);
+        int BestTheme(int img)
+        {
+            int bi = 0;
+            for (int t = 1; t < themeCount; t++)
+                if (ScoreOf(img, t) > ScoreOf(img, bi)) bi = t;
+            return bi;
+        }
 
-        void Add(int img, int? theme)
+        bool Eligible(int img) => MaxScore(img) > minRelevance;
+
+        bool IsDup(int img) =>
+            chosen.Any(c => PerceptualHash.HammingDistance(scored[c.Img].Hash, scored[img].Hash) <= hammingThreshold);
+
+        void Add(int img, int theme, bool cover)
         {
             usedImage[img] = true;
-            if (theme is int t) coveredTheme[t] = true;
-            chosen.Add(img);
+            if (cover) coveredTheme[theme] = true;
+            chosen.Add((img, theme));
         }
 
         void FillBy(Func<int, bool> ok)
         {
             foreach (int img in Enumerable.Range(0, scored.Count)
-                         .Where(ok)
+                         .Where(img => Eligible(img) && ok(img))
                          .OrderByDescending(MaxScore)
                          .ThenBy(img => scored[img].Path, StringComparer.Ordinal))
             {
                 if (chosen.Count >= count) return;
-                Add(img, theme: null);
+                Add(img, BestTheme(img), cover: false); // fill picks display their strongest theme
             }
         }
 
         // 1) All (image, theme, score) triples, best first; tie-break by path then theme for determinism.
-        var triples = new List<(int Img, int Theme, double Score)>(scored.Count * themes);
+        var triples = new List<(int Img, int Theme, double Score)>(scored.Count * themeCount);
         for (int img = 0; img < scored.Count; img++)
-            for (int t = 0; t < themes; t++)
+            for (int t = 0; t < themeCount; t++)
                 triples.Add((img, t, ScoreOf(img, t)));
 
         triples.Sort((a, b) =>
@@ -142,12 +185,13 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             return c != 0 ? c : a.Theme.CompareTo(b.Theme);
         });
 
-        // 2) Greedy per-theme assignment: best distinct, non-duplicate image for each uncovered theme.
-        foreach (var (img, theme, _) in triples)
+        // 2) Greedy per-theme assignment: best distinct, non-duplicate, sufficiently-relevant image per theme.
+        foreach (var (img, theme, score) in triples)
         {
             if (chosen.Count >= count) break;
+            if (score <= minRelevance) break; // triples are sorted desc — nothing past here qualifies
             if (coveredTheme[theme] || usedImage[img] || IsDup(img)) continue;
-            Add(img, theme);
+            Add(img, theme, cover: true);
         }
 
         // 3) Fill leftover slots (themeCount < count, or themes with no usable image) with distinct,
@@ -155,18 +199,23 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         if (chosen.Count < count)
             FillBy(img => !usedImage[img] && !IsDup(img));
 
-        // 4) Last resort: if still short purely because of dedup, relax the duplicate check.
+        // 4) If still short purely because of dedup, relax the duplicate check (relevance floor stays).
         if (chosen.Count < count)
             FillBy(img => !usedImage[img]);
 
+        if (chosen.Count == 0)
+            return Array.Empty<SelectedImage>();
+
         // 5) Featured = highest single score among the chosen images.
         int featured = chosen
-            .OrderByDescending(MaxScore)
-            .ThenBy(img => scored[img].Path, StringComparer.Ordinal)
-            .First();
+            .OrderByDescending(c => MaxScore(c.Img))
+            .ThenBy(c => scored[c.Img].Path, StringComparer.Ordinal)
+            .First().Img;
+
+        string? ThemeName(int idx) => idx >= 0 && idx < themes.Count ? themes[idx] : null;
 
         return chosen
-            .Select(img => new SelectedImage(scored[img].Path, MaxScore(img), img == featured))
+            .Select(c => new SelectedImage(scored[c.Img].Path, MaxScore(c.Img), c.Img == featured, ThemeName(c.Theme)))
             .ToList();
     }
 

@@ -21,7 +21,7 @@ public class TagBasedImageSelectorTests
     {
         H1 = "Mountain Hiking Guide",
         BodyHtml = "<p>Trails and peaks await.</p>",
-        ImageThemes = new List<string> { "mountain", "trail" },
+        ImageThemes = new List<ImageTheme> { new("mountain", "mountain"), new("trail", "trail") },
     };
 
     // ---- ParseSelectedIndices ----
@@ -109,7 +109,7 @@ public class TagBasedImageSelectorTests
         {
             H1 = "Italian Pasta Recipes",
             BodyHtml = "<p>Cooking spaghetti and sauce.</p>",
-            ImageThemes = new List<string> { "pasta", "kitchen" },
+            ImageThemes = new List<ImageTheme> { new("pasta", "pasta"), new("kitchen", "kitchen") },
         };
 
         var picked = await new TagBasedImageSelector(fake, "{TAGGED_IMAGES}")

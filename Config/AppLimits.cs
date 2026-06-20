@@ -32,11 +32,24 @@ public static class AppLimits
     /// </summary>
     public const int DefaultImageDedupThreshold = 6;
 
+    /// <summary>
+    /// Default minimum vision relevance score an image must exceed to be attached. Images scoring at or
+    /// below this are never selected (a theme is left uncovered rather than padded with an irrelevant
+    /// image). 0.0 drops only zero-scoring images; raise it to be stricter.
+    /// </summary>
+    public const double DefaultMinImageRelevance = 0.0;
+
     /// <summary>Maximum number of post tags applied to a published post.</summary>
     public const int MaxPostTags = 5;
 
     /// <summary>Default category applied when the model returns none.</summary>
     public const string DefaultCategory = "Blog";
+
+    /// <summary>Default minimum Editor score [0,1] a draft must reach to be accepted without a rewrite.</summary>
+    public const double DefaultEditorReviewerThreshold = 0.80;
+
+    /// <summary>Maximum number of Editor-driven rewrites before publishing the best draft anyway.</summary>
+    public const int MaxEditorRevisions = 2;
 
     /// <summary>Cap on the LLM response length we will attempt to parse (defensive).</summary>
     public const int MaxLlmResponseLength = 1 * 1024 * 1024; // 1 MB

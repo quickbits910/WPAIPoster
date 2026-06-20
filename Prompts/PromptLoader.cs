@@ -22,6 +22,7 @@ public static class PromptLoader
     public const string BlogPostPromptFile = "blog-post-prompt.json";
     public const string ImageRelevancePromptFile = "image-relevance-prompt.json";
     public const string TagToBodyPromptFile = "tag-to-blog-post-body-prompt.json";
+    public const string EditorReviewerPromptFile = "editor-reviewer-prompt.json";
 
     public static PromptConfig Load(string fileName)
     {

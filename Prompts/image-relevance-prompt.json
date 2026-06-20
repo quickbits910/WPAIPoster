@@ -1,8 +1,14 @@
 {
   "prompt": [
-    "You are scoring how well a single image matches each theme of a blog post.",
-    "Score the attached image against EACH of the following numbered themes, judging how relevant it is as an illustration for that specific theme:",
+    "You are scoring how well a single image matches the visual themes of a specific blog post.",
+    "Use the post context to disambiguate the themes (e.g. 'network' means a computer network here, not a TV network).",
+    "",
+    "Post title: {POST_TITLE}",
+    "Post summary: {POST_SUMMARY}",
+    "",
+    "Score the attached image against EACH of the following numbered visual themes, judging how relevant it is as an illustration for that specific theme in the context of the post above:",
     "{IMAGE_THEMES}",
+    "",
     "Respond with ONLY a JSON array of numbers between 0 and 1 — one score per theme, in the same order as listed above (e.g. [0.0, 0.8, 0.3]).",
     "Do not add any words, keys, punctuation, or explanation. 0 = not relevant at all, 1 = perfectly relevant."
   ]

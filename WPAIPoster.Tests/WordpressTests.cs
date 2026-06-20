@@ -249,7 +249,7 @@ public class WpCliPublisherTests
         MetaDescription = "Meta D",
         H1 = "The Title",
         BodyHtml = "<p>Intro.</p><p>Body.</p>",
-        ImageThemes = new List<string> { "theme" },
+        ImageThemes = new List<ImageTheme> { new("theme", "theme") },
         Cta = "Go.",
     };
 

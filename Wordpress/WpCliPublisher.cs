@@ -60,7 +60,9 @@ public sealed class WpCliPublisher(
                 runner.UploadFile(img.Path, remoteImg);
 
                 string title = $"{post.H1} image {i + 1}";
-                string alt = post.ImageThemes.Count > 0 ? string.Join(", ", post.ImageThemes) : post.H1;
+                string alt = post.ImageThemes.Count > 0
+                    ? string.Join(", ", post.ImageThemes.Select(t => t.Subject))
+                    : post.H1;
                 string importCmd = WpCliCommands.InFolder(
                     wordPressFolder,
                     WpCliCommands.ImportMedia(remoteImg, postId, title, alt, img.IsFeatured));

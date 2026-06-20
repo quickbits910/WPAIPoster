@@ -88,6 +88,9 @@ public class ImageRelevanceSelectorTests
 
     private static ScoredImage Img(string path, double[] scores, ulong hash = 0) => new(path, scores, hash);
 
+    // Theme names matching a score vector by index (t0, t1, ...).
+    private static string[] Themes(int n) => Enumerable.Range(0, n).Select(i => "t" + i).ToArray();
+
     [Theory]
     [InlineData("0.85", 0.85)]
     [InlineData("Relevance: 0.4", 0.4)]
@@ -144,12 +147,17 @@ public class ImageRelevanceSelectorTests
             Img("d.jpg", new[] { 0.2, 0.1, 0.8 }),
         };
 
-        var picks = ImageRelevanceSelector.Select(scored, themeCount: 3, count: 3, hammingThreshold: NoDedup);
+        var picks = ImageRelevanceSelector.Select(scored, Themes(3), count: 3, hammingThreshold: NoDedup);
 
         Assert.Equal(3, picks.Count);
         Assert.Equal(new[] { "a.jpg", "c.jpg", "d.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
         Assert.DoesNotContain("b.jpg", picks.Select(p => p.Path)); // duplicate-theme image excluded
         Assert.Equal("a.jpg", picks.Single(p => p.IsFeatured).Path); // 0.9, tie broken by path
+
+        // Each pick records the theme it was assigned to.
+        Assert.Equal("t0", picks.Single(p => p.Path == "a.jpg").Theme);
+        Assert.Equal("t1", picks.Single(p => p.Path == "c.jpg").Theme);
+        Assert.Equal("t2", picks.Single(p => p.Path == "d.jpg").Theme);
     }
 
     [Fact]
@@ -163,7 +171,7 @@ public class ImageRelevanceSelectorTests
         };
 
         // Single theme, two slots: 'a' covers the theme, the fill slot must skip the near-dup 'b' for 'c'.
-        var picks = ImageRelevanceSelector.Select(scored, themeCount: 1, count: 2, hammingThreshold: 6);
+        var picks = ImageRelevanceSelector.Select(scored, Themes(1), count: 2, hammingThreshold: 6);
 
         Assert.Equal(new[] { "a.jpg", "c.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
         Assert.DoesNotContain("b.jpg", picks.Select(p => p.Path));
@@ -179,7 +187,7 @@ public class ImageRelevanceSelectorTests
             Img("c.jpg", new[] { 0.5 }, hash: 0xFFFFFFFFFFFFFFFF),
         };
 
-        var picks = ImageRelevanceSelector.Select(scored, themeCount: 1, count: 2, hammingThreshold: NoDedup);
+        var picks = ImageRelevanceSelector.Select(scored, Themes(1), count: 2, hammingThreshold: NoDedup);
 
         Assert.Equal(new[] { "a.jpg", "b.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
     }
@@ -195,7 +203,7 @@ public class ImageRelevanceSelectorTests
             Img("c.jpg", new[] { 0.7 }, hash: 0x3),
         };
 
-        var picks = ImageRelevanceSelector.Select(scored, themeCount: 1, count: 3, hammingThreshold: 6);
+        var picks = ImageRelevanceSelector.Select(scored, Themes(1), count: 3, hammingThreshold: 6);
 
         Assert.Equal(3, picks.Count);
     }
@@ -211,7 +219,7 @@ public class ImageRelevanceSelectorTests
             Img("d.jpg", new[] { 0.1 }),
         };
 
-        var picks = ImageRelevanceSelector.Select(scored, themeCount: 1, count: 3, hammingThreshold: NoDedup);
+        var picks = ImageRelevanceSelector.Select(scored, Themes(1), count: 3, hammingThreshold: NoDedup);
 
         Assert.Equal(new[] { "b.jpg", "c.jpg", "a.jpg" }, picks.Select(p => p.Path));
         Assert.True(picks[0].IsFeatured);
@@ -227,7 +235,7 @@ public class ImageRelevanceSelectorTests
             Img("d.jpg", new[] { 0.1, 0.1, 0.95 }),
         };
 
-        var picks = ImageRelevanceSelector.Select(scored, themeCount: 3, count: 2, hammingThreshold: NoDedup);
+        var picks = ImageRelevanceSelector.Select(scored, Themes(3), count: 2, hammingThreshold: NoDedup);
 
         Assert.Equal(2, picks.Count);
         Assert.Equal("d.jpg", picks.Single(p => p.IsFeatured).Path); // 0.95 is the global best
@@ -237,9 +245,55 @@ public class ImageRelevanceSelectorTests
     public void Select_CountLargerThanCandidates_ReturnsAll()
     {
         var scored = new[] { Img("a.jpg", new[] { 0.5 }) };
-        var picks = ImageRelevanceSelector.Select(scored, themeCount: 1, count: 3, hammingThreshold: NoDedup);
+        var picks = ImageRelevanceSelector.Select(scored, Themes(1), count: 3, hammingThreshold: NoDedup);
         Assert.Single(picks);
         Assert.True(picks[0].IsFeatured);
+    }
+
+    [Fact]
+    public void Select_NeverPadsWithZeroScoringImages()
+    {
+        // 2 themes, 4 slots, but only 'a' and 'c' have any relevance — the zero images must not fill slots.
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.9, 0.0 }),
+            Img("b.jpg", new[] { 0.0, 0.0 }),
+            Img("c.jpg", new[] { 0.0, 0.8 }),
+            Img("d.jpg", new[] { 0.0, 0.0 }),
+        };
+
+        var picks = ImageRelevanceSelector.Select(scored, Themes(2), count: 4, hammingThreshold: NoDedup);
+
+        Assert.Equal(new[] { "a.jpg", "c.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+    }
+
+    [Fact]
+    public void Select_MinRelevanceFloor_DropsWeakMatches()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.8 }),
+            Img("b.jpg", new[] { 0.7 }),
+        };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup, minRelevance: 0.75);
+
+        Assert.Equal(new[] { "a.jpg" }, picks.Select(p => p.Path));
+    }
+
+    [Fact]
+    public void Select_AllBelowFloor_ReturnsEmpty()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.0 }),
+            Img("b.jpg", new[] { 0.0 }),
+        };
+
+        var picks = ImageRelevanceSelector.Select(scored, Themes(1), count: 2, hammingThreshold: NoDedup);
+
+        Assert.Empty(picks);
     }
 }
 
