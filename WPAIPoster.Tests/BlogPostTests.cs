@@ -107,6 +107,28 @@ public class BlogPostParserTests
     }
 
     [Fact]
+    public void Parse_RepairsUnescapedQuotesInBody()
+    {
+        // bodyHtml contains an HTML attribute with unescaped double-quotes — invalid JSON as-is.
+        const string raw = """{ "h1": "H", "bodyHtml": "<p>See <a href="https://x.test">here</a>.</p>" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("H", post.H1);
+        Assert.Contains("href=\"https://x.test\"", post.BodyHtml);
+    }
+
+    [Fact]
+    public void Parse_RepairsRawNewlinesInBody()
+    {
+        // A literal newline inside a string value is invalid JSON; the repair pass escapes it.
+        const string raw = "{ \"h1\": \"H\", \"bodyHtml\": \"<p>line one\nline two</p>\" }";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("line one", post.BodyHtml);
+        Assert.Contains("line two", post.BodyHtml);
+    }
+
+    [Fact]
     public void Parse_NoBody_ThrowsWithRawResponse()
     {
         const string raw = """{ "metaTitle": "T", "h1": "H", "cta": "Go" }""";

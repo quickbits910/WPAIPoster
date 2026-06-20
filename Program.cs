@@ -182,8 +182,13 @@ finally
 static string Prompt(string message)
 {
     Console.WriteLine(message);
+    Console.WriteLine("(paste as many lines as you like, then press Ctrl-D on an empty line to finish)");
     Console.Write("> ");
-    return Console.ReadLine() ?? string.Empty;
+    var lines = new List<string>();
+    string? line;
+    while ((line = Console.ReadLine()) is not null)
+        lines.Add(line);
+    return string.Join('\n', lines).Trim();
 }
 
 static void PrintPost(BlogPostResult post)

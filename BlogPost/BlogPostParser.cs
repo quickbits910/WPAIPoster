@@ -31,19 +31,16 @@ public static class BlogPostParser
 
         string json = ExtractJsonObject(raw);
 
-        BlogPostResult result;
-        try
-        {
-            result = JsonSerializer.Deserialize<BlogPostResult>(json, Options)
-                     ?? throw new FormatException("The model response deserialized to null.");
-
-            using JsonDocument doc = JsonDocument.Parse(json, DocOptions);
-            Backfill(result, doc.RootElement);
-        }
-        catch (JsonException ex)
-        {
-            throw new FormatException($"Could not parse the model response as a blog post: {ex.Message}", ex);
-        }
+        // Models frequently emit string values (especially bodyHtml) containing unescaped quotes,
+        // newlines, or control chars, which are invalid JSON. Try the response as-is first, then
+        // fall back to a repaired copy that re-escapes those characters.
+        BlogPostResult result =
+            TryDeserialize(json, out BlogPostResult? parsed, out JsonException? firstError) && parsed is not null
+                ? parsed
+                : TryDeserialize(RepairJson(json), out BlogPostResult? repaired, out _) && repaired is not null
+                    ? repaired
+                    : throw new FormatException(
+                        $"Could not parse the model response as a blog post: {firstError!.Message}", firstError);
 
         if (string.IsNullOrWhiteSpace(result.BodyHtml))
             throw new FormatException(
@@ -51,6 +48,93 @@ public static class BlogPostParser
                 "Raw response:\n" + Truncate(raw!, 2000));
 
         return result;
+    }
+
+    private static bool TryDeserialize(string json, out BlogPostResult? result, out JsonException? error)
+    {
+        error = null;
+        result = null;
+        try
+        {
+            result = JsonSerializer.Deserialize<BlogPostResult>(json, Options);
+            if (result is null)
+                return false;
+
+            using JsonDocument doc = JsonDocument.Parse(json, DocOptions);
+            Backfill(result, doc.RootElement);
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = ex;
+            result = null;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort repair of JSON that string values broke: re-escapes unescaped double-quotes,
+    /// raw newlines/tabs, and other control characters that appear inside string literals. Heuristic —
+    /// a <c>"</c> is treated as the end of a string only when the next non-whitespace char is structural
+    /// (<c>: , } ]</c>) or end-of-input; otherwise it is escaped as part of the content.
+    /// </summary>
+    internal static string RepairJson(string json)
+    {
+        var sb = new StringBuilder(json.Length + 16);
+        bool inString = false;
+
+        for (int i = 0; i < json.Length; i++)
+        {
+            char c = json[i];
+
+            if (!inString)
+            {
+                sb.Append(c);
+                if (c == '"') inString = true;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '\\':
+                    // Copy an existing escape sequence (backslash + following char) verbatim.
+                    sb.Append(c);
+                    if (i + 1 < json.Length) sb.Append(json[++i]);
+                    break;
+                case '"':
+                    if (IsStringEnd(json, i))
+                    {
+                        sb.Append('"');
+                        inString = false;
+                    }
+                    else
+                    {
+                        sb.Append("\\\"");
+                    }
+                    break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                    else sb.Append(c);
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>True if the quote at <paramref name="quoteIndex"/> looks like a string terminator.</summary>
+    private static bool IsStringEnd(string s, int quoteIndex)
+    {
+        for (int j = quoteIndex + 1; j < s.Length; j++)
+        {
+            char c = s[j];
+            if (char.IsWhiteSpace(c)) continue;
+            return c is ':' or ',' or '}' or ']';
+        }
+        return true; // end of input → must be the closing quote
     }
 
     /// <summary>Fills empty fields from alternately-named keys the model may have used.</summary>
