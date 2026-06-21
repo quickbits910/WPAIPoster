@@ -51,6 +51,9 @@ public static class AppLimits
     /// <summary>Maximum number of Editor-driven rewrites before publishing the best draft anyway.</summary>
     public const int MaxEditorRevisions = 2;
 
+    /// <summary>Default folder (relative to the working directory) where per-run log files are written.</summary>
+    public const string DefaultOutputFolder = "Output";
+
     /// <summary>Cap on the LLM response length we will attempt to parse (defensive).</summary>
     public const int MaxLlmResponseLength = 1 * 1024 * 1024; // 1 MB
 }

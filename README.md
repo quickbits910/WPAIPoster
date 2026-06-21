@@ -63,6 +63,7 @@ ask to publish.
   "defaultCategory": "Blog",
   "enableEditorReviewer": false,
   "editorReviewerThreshold": 0.8,
+  "outputFolder": "./Output",
   "seoMetaKeys": {
     "title": "_yoast_wpseo_title",
     "description": "_yoast_wpseo_metadesc"
@@ -90,6 +91,7 @@ ask to publish.
 | `defaultCategory` | Category applied when the model returns none (default `Blog`). |
 | `enableEditorReviewer` | `true` → an Editor LLM scores the draft and drives rewrites; `false` (default) skips review. |
 | `editorReviewerThreshold` | Minimum Editor score (`0.00`–`1.00`) a draft must reach to be accepted without a rewrite (default `0.80`). |
+| `outputFolder` | Folder where each run writes its log file (default `./Output`). |
 | `seoMetaKeys` | Post-meta keys for your SEO plugin (defaults to Yoast). Set to `null` to skip. |
 
 ### 2. Configure SSH — `ssh-config.json`
@@ -165,11 +167,25 @@ lines (the whole brief, tables, code, etc.) and finish input with **Ctrl-D** on 
 | `--publish` | Publish immediately (overrides `autoPublish`). |
 | `--draft` | Force draft (overrides `autoPublish`). |
 | `--no-images` | Skip image selection and upload. |
+| `--verbose`, `-v` | Show full detail on the console (incl. raw model prompts/replies). |
+| `--quiet`, `-q` | Only warnings, errors, and the final result. |
+| `--debug` | Print full stack traces on error. |
 | `--set-key-password` | Encrypt and store the private-key passphrase. |
 | `--set-ssh-password` | Encrypt and store the SSH login password. |
 | `-h`, `--help` | Show help. |
 
 When it finishes, it prints the new post ID and an admin edit URL.
+
+### Console output & logs
+
+The run shows colourised, staged progress — status spinners for each step (connect, generate, editor
+review, publish) and a progress bar while images are vision-scored. Styling is automatically disabled
+when output is piped/redirected or `NO_COLOR` is set.
+
+**Every run writes a full log file** to the output folder (default `./Output/run-<timestamp>-<id>.log`),
+including the brief, configuration, each stage, the rendered post, and the **raw model prompts/replies** —
+handy for debugging. The console stays concise by default; `--verbose` mirrors the full detail to the
+terminal and `--quiet` trims it. The log path is printed at the end of every run.
 
 ## How publishing works (under the hood)
 

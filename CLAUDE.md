@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (164 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (205 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -35,7 +35,8 @@ The test project is **nested** at `WPAIPoster.Tests/`.
 WPAIPoster.sln  WPAIPoster.csproj  Program.cs        # entry point + orchestration (top-level statements)
 app.settings.json   ssh-config.json                  # runtime config (copied to output)
 Config/      AppSettings, SshConfig, SshConfigProtector (AES-GCM), AppLimits
-Llm/         ILlmClient + provider clients + ChatModels/AnthropicModels + LlmClientFactory
+Ui/          RunLogger (per-run log file), Ui (Spectre facade), Verbosity
+Llm/         ILlmClient + provider clients + LoggingLlmClient + ChatModels/AnthropicModels + LlmClientFactory
 Prompts/     blog-post-prompt.json, image-relevance-prompt.json, editor-reviewer-prompt.json,
              tag-to-blog-post-body-prompt.json, PromptLoader (copied to output)
 BlogPost/    BlogPostGenerator, BlogPostResult (+ ImageTheme/ImageThemeListConverter),
@@ -89,6 +90,16 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   `enableEditorReviewer` / `editorReviewerThreshold`; the rewrite loop lives in `Program.cs`.
 - **Multi-line brief input**: the interactive `Prompt` in `Program.cs` reads stdin until **EOF (Ctrl-D)**,
   not a single line, so pasted multi-line briefs (tables, code) are captured whole.
+- **Terminal UI + logging** (`Ui/`): all pipeline output goes through the `Ui` facade (Spectre.Console —
+  colours, `Status` spinners, a `Progress` bar for vision-scoring, `RenderPost` panel), which tees every
+  message to a `RunLogger` — a per-run plain-text log file under `outputFolder` (default `./Output`,
+  gitignored). `Verbosity` (`--quiet`/`--verbose`) gates the console; the file always gets full detail.
+  Raw model I/O is captured by wrapping each `ILlmClient` in `LoggingLlmClient`. Spectre auto-disables
+  styling when piped/`NO_COLOR`. `Ui` is `[ExcludeFromCodeCoverage]` (real console I/O); `RunLogger`
+  (writes verbatim — never strip brackets, so JSON in the log stays intact) and `LoggingLlmClient` are
+  unit-tested. Long-running collaborators
+  report progress via callbacks: `WpCliPublisher.Publish(..., onStep)` and
+  `ImageRelevanceSelector.SelectAsync(..., onScored)`.
 - **WP-CLI commands**: build them only via `WpCliCommands` (pure, shell-quoted, unit-tested). Post
   content is transferred as a remote file (SFTP), never inlined into the command — this avoids shell
   escaping of HTML.
@@ -123,8 +134,8 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 - `app.settings.json` — `provider`, `model`, `visionModel`, `baseUrl`, `apiKey`, `imageLibrary`,
   `autoPublish`, `wordPressFolder`, `maxImagesToScore`, `imagesPerPost`, `maxImagesToIndex`, `tagPrefix`,
   `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `defaultCategory`,
-  `enableEditorReviewer`, `editorReviewerThreshold`, `seoMetaKeys`. Nullable (each falls back to the
-  matching `AppLimits` default); API key also falls back to `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
+  `enableEditorReviewer`, `editorReviewerThreshold`, `outputFolder`, `seoMetaKeys`. Nullable (each falls
+  back to the matching `AppLimits` default); API key also falls back to `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
 - `ssh-config.json` — `server`, `port`, `username`, `keyPath`, `privateKeyPwdEnc`, `passwordEnc`,
   `sshExecutablePath` (reserved/unused by the SSH.NET path).
 

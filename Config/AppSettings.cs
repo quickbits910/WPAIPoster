@@ -106,6 +106,10 @@ public sealed class AppSettings
     [JsonPropertyName("seoMetaKeys")]
     public SeoMetaKeys? SeoMetaKeys { get; set; }
 
+    /// <summary>Folder where each run writes its log file. Null uses the default ("./Output").</summary>
+    [JsonPropertyName("outputFolder")]
+    public string? OutputFolder { get; set; }
+
     /// <summary>Absolute path of the settings file that was loaded, or null if none was found.</summary>
     [JsonIgnore]
     public string? LoadedFrom { get; private set; }

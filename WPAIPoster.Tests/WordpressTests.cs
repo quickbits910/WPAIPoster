@@ -310,6 +310,27 @@ public class WpCliPublisherTests
     }
 
     [Fact]
+    public void Publish_ReportsEachStep_ViaOnStep()
+    {
+        var runner = new FakeSshRunner(Responder());
+        var images = new List<SelectedImage>
+        {
+            new("/tmp/feat.jpg", 0.9, IsFeatured: true),
+            new("/tmp/extra.jpg", 0.5, IsFeatured: false),
+        };
+        var publisher = new WpCliPublisher(runner, "site.au", seoMetaKeys: null);
+
+        var steps = new List<string>();
+        publisher.Publish(SamplePost(), images, publish: false, onStep: steps.Add);
+
+        Assert.Contains(steps, s => s.Contains("Creating draft"));
+        Assert.Contains(steps, s => s.Contains("tags and categories"));
+        Assert.Contains(steps, s => s.Contains("Uploading image 1/2"));
+        Assert.Contains(steps, s => s.Contains("Uploading image 2/2"));
+        Assert.Contains(steps, s => s.Contains("updating post body"));
+    }
+
+    [Fact]
     public void Publish_NoSeoKeys_SkipsMeta()
     {
         var runner = new FakeSshRunner(Responder());

@@ -24,14 +24,17 @@ public sealed class WpCliPublisher(
     /// Publishes <paramref name="post"/> with the selected <paramref name="images"/> (already prepared
     /// under the size cap). <paramref name="publish"/> false ⇒ draft.
     /// </summary>
-    public PublishOutcome Publish(BlogPostResult post, IReadOnlyList<SelectedImage> images, bool publish)
+    public PublishOutcome Publish(
+        BlogPostResult post, IReadOnlyList<SelectedImage> images, bool publish, Action<string>? onStep = null)
     {
         string runId = Guid.NewGuid().ToString("N");
         var remoteTemps = new List<string>();
+        void Step(string message) => onStep?.Invoke(message);
 
         try
         {
             // 1. Upload the body and create the post.
+            Step(publish ? "Creating published post" : "Creating draft post");
             string remoteBody = RemotePath($"wpaiposter-{runId}.html");
             remoteTemps.Add(remoteBody);
             UploadText(post.BodyHtml, remoteBody);
@@ -42,9 +45,11 @@ public sealed class WpCliPublisher(
             int postId = RunForId(createCmd, "create post");
 
             // 2. SEO meta (optional, plugin-dependent).
+            Step("Writing SEO meta");
             WriteSeoMeta(postId, post);
 
             // 2b. Tags (max 5) and categories (default applied when none).
+            Step("Applying tags and categories");
             ApplyTerms(postId, TagTaxonomy, post.Tags.Take(AppLimits.MaxPostTags));
             var categories = post.Categories.Count > 0 ? post.Categories : new List<string> { defaultCategory };
             ApplyTerms(postId, CategoryTaxonomy, categories);
@@ -53,6 +58,7 @@ public sealed class WpCliPublisher(
             var embedded = new List<EmbeddedImage>();
             for (int i = 0; i < images.Count; i++)
             {
+                Step($"Uploading image {i + 1}/{images.Count}");
                 SelectedImage img = images[i];
                 string ext = Path.GetExtension(img.Path);
                 string remoteImg = RemotePath($"wpaiposter-{runId}-{i}{ext}");
@@ -80,6 +86,7 @@ public sealed class WpCliPublisher(
             // 4. Re-write the body with inline images, if any.
             if (embedded.Count > 0)
             {
+                Step("Embedding images and updating post body");
                 string finalHtml = HtmlImageEmbedder.Embed(post.BodyHtml, embedded);
                 string remoteBody2 = RemotePath($"wpaiposter-{runId}-final.html");
                 remoteTemps.Add(remoteBody2);

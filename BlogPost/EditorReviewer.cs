@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using WPAIPoster.Llm;
@@ -40,6 +41,36 @@ public sealed partial class EditorReviewer(ILlmClient client, string promptTempl
         string prompt = BuildPrompt(promptTemplate, userInput, post);
         string? reply = await client.SendAsync(prompt, null, null);
         return ParseReview(reply);
+    }
+
+    /// <summary>
+    /// Combines feedback from successive review rounds into a single block for the next rewrite, so earlier
+    /// (possibly unaddressed) notes are retained. Each round is labelled; the model is told some points may
+    /// already be addressed and to satisfy them all. Returns the single note unchanged when there's only one.
+    /// </summary>
+    public static string CombineFeedback(IReadOnlyList<string> notes)
+    {
+        var cleaned = notes
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n.Trim())
+            .ToList();
+
+        if (cleaned.Count == 0)
+            return string.Empty;
+        if (cleaned.Count == 1)
+            return cleaned[0];
+
+        var sb = new StringBuilder();
+        sb.AppendLine(
+            "These notes are from successive review rounds (earliest first); some may already be addressed — " +
+            "ensure EVERY point below is satisfied in this rewrite:");
+        for (int i = 0; i < cleaned.Count; i++)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Review round {i + 1}:");
+            sb.AppendLine(cleaned[i]);
+        }
+        return sb.ToString().Trim();
     }
 
     /// <summary>Fills the reviewer prompt tokens from the brief and the draft. Pure and testable.</summary>

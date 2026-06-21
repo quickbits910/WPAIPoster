@@ -1,7 +1,9 @@
+using Spectre.Console;
 using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
 using WPAIPoster.Images;
 using WPAIPoster.Llm;
+using WPAIPoster.Ui;
 using WPAIPoster.Wordpress;
 
 // ---- Argument parsing ----------------------------------------------------
@@ -12,6 +14,7 @@ bool setKeyPassword = false;
 bool? publishOverride = null;
 bool noImages = false;
 bool debug = false;
+Verbosity verbosity = Verbosity.Normal;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -23,6 +26,8 @@ for (int i = 0; i < args.Length; i++)
         case "--draft": publishOverride = false; break;
         case "--no-images": noImages = true; break;
         case "--debug": debug = true; break;
+        case "--verbose" or "-v": verbosity = Verbosity.Verbose; break;
+        case "--quiet" or "-q": verbosity = Verbosity.Quiet; break;
         case "-h" or "--help": PrintUsage(); return 0;
         default: positionals.Add(args[i]); break;
     }
@@ -82,68 +87,91 @@ string tagPrefix = settings.TagPrefix ?? AppLimits.DefaultTagPrefix;
 int tagCandidateLimit = settings.TagCandidateLimit ?? AppLimits.DefaultTagCandidateLimit;
 int imageDedupThreshold = settings.ImageDedupThreshold ?? AppLimits.DefaultImageDedupThreshold;
 double minImageRelevance = settings.MinImageRelevance ?? AppLimits.DefaultMinImageRelevance;
+string outputFolder = settings.OutputFolder ?? AppLimits.DefaultOutputFolder;
+
+// ---- Logging + UI ---------------------------------------------------------
+
+var logger = new RunLogger(outputFolder, DateTime.Now, Guid.NewGuid().ToString("N"));
+var ui = new Ui(AnsiConsole.Console, logger, verbosity);
+
+ui.Rule("WPAIPoster");
+ui.Detail($"Brief: {brief}");
+ui.Detail($"Provider: {settings.Provider}, model: {settings.Model}, vision: {settings.VisionModel ?? settings.Model}");
+ui.Detail($"Publish: {publish}, images: {(noImages ? "off" : imagesPerPost.ToString())}, output: {outputFolder}");
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
-ILlmClient textClient = LlmClientFactory.Create(http, settings.Provider, settings.Model, settings.BaseUrl, settings.ApiKey);
-ILlmClient visionClient = LlmClientFactory.Create(
-    http, settings.Provider, settings.VisionModel ?? settings.Model, settings.BaseUrl, settings.ApiKey);
+ILlmClient textClient = new LoggingLlmClient(
+    LlmClientFactory.Create(http, settings.Provider, settings.Model, settings.BaseUrl, settings.ApiKey),
+    logger, "text");
+ILlmClient visionClient = new LoggingLlmClient(
+    LlmClientFactory.Create(http, settings.Provider, settings.VisionModel ?? settings.Model, settings.BaseUrl, settings.ApiKey),
+    logger, "vision");
 
 var tempImages = new List<string>();
 
 try
 {
-    using ISshRunner runner = SshNetRunner.Connect(sshConfig, protector);
-    Console.WriteLine($"Connected to {sshConfig.Username}@{sshConfig.Server}:{sshConfig.EffectivePort}.");
+    using ISshRunner runner = ui.Status("Connecting to the WordPress server",
+        () => SshNetRunner.Connect(sshConfig, protector));
+    ui.Success($"Connected to {sshConfig.Username}@{sshConfig.Server}:{sshConfig.EffectivePort}");
 
     string folder = settings.WordPressFolder ?? ".";
 
     // 1. Existing posts (internal-link context).
     var fetcher = new ExistingPostsFetcher(runner, folder);
-    var existing = fetcher.Fetch();
-    Console.WriteLine($"Found {existing.Count} published post(s) for internal-link context.");
+    var existing = ui.Status("Fetching existing posts for internal-link context", () => fetcher.Fetch());
+    ui.Success($"Found {existing.Count} published post(s) for internal-link context");
     string existingText = ExistingPostsFetcher.FormatForPrompt(existing);
 
     // 2. Generate the post (optionally gated by the Editor reviewer, which drives rewrites).
-    // URLs in the brief must survive into the final post — pass them to the model, guarantee them later.
+    ui.Rule("Generate");
     IReadOnlyList<string> briefLinks = BriefLinks.ExtractUrls(brief);
     if (briefLinks.Count > 0)
-        Console.WriteLine($"Found {briefLinks.Count} source link(s) in the brief to carry through.");
+        ui.Info($"Found {briefLinks.Count} source link(s) in the brief to carry through");
 
-    Console.WriteLine("Generating blog post...");
     var generator = BlogPostGenerator.Create(textClient);
-    BlogPostResult post = await generator.GenerateAsync(brief, existingText, sourceLinks: briefLinks);
+    BlogPostResult post = await ui.StatusAsync("Generating blog post",
+        () => generator.GenerateAsync(brief, existingText, sourceLinks: briefLinks));
+    ui.Success("Draft generated");
 
     if (settings.EnableEditorReviewer ?? false)
     {
         double threshold = settings.EditorReviewerThreshold ?? AppLimits.DefaultEditorReviewerThreshold;
         var reviewer = EditorReviewer.Create(textClient);
 
-        Console.WriteLine("Editor reviewing draft...");
-        EditorReview review = await reviewer.ReviewAsync(brief, post);
+        EditorReview review = await ui.StatusAsync("Editor reviewing draft", () => reviewer.ReviewAsync(brief, post));
+        var feedbackNotes = new List<string>(); // accumulated across rounds so rewrites retain earlier notes
 
         for (int rewrite = 0; rewrite < AppLimits.MaxEditorRevisions; rewrite++)
         {
             if (review.IsUnscored)
             {
-                Console.WriteLine("Editor review could not be parsed — accepting the draft.");
+                ui.Warn("Editor review could not be parsed — accepting the draft");
                 break;
             }
 
-            Console.WriteLine($"Editor score: {review.Score:0.00} (threshold {threshold:0.00}).");
+            ui.Info($"Editor score: {review.Score:0.00} (threshold {threshold:0.00})");
             if (review.Score >= threshold)
                 break;
 
-            Console.WriteLine("Editor requested a rewrite. Feedback:");
-            Console.WriteLine($"  {review.Feedback}");
-            Console.WriteLine($"Rewriting blog post (attempt {rewrite + 1}/{AppLimits.MaxEditorRevisions})...");
-            post = await generator.GenerateAsync(brief, existingText, review.Feedback, briefLinks);
-            review = await reviewer.ReviewAsync(brief, post);
+            if (!feedbackNotes.Any(n => string.Equals(n, review.Feedback, StringComparison.OrdinalIgnoreCase)))
+                feedbackNotes.Add(review.Feedback);
+            string combinedFeedback = EditorReviewer.CombineFeedback(feedbackNotes);
+
+            ui.Warn($"Editor requested a rewrite (attempt {rewrite + 1}/{AppLimits.MaxEditorRevisions})");
+            ui.Detail($"Editor feedback (cumulative, {feedbackNotes.Count} round(s)):\n{combinedFeedback}");
+            post = await ui.StatusAsync("Rewriting blog post",
+                () => generator.GenerateAsync(brief, existingText, combinedFeedback, briefLinks));
+            review = await ui.StatusAsync("Editor reviewing rewrite", () => reviewer.ReviewAsync(brief, post));
         }
 
         if (!review.IsUnscored)
-            Console.WriteLine(review.Score >= threshold
-                ? $"Editor approved the draft (score {review.Score:0.00})."
-                : $"Editor still below threshold (score {review.Score:0.00}) after {AppLimits.MaxEditorRevisions} rewrite(s); proceeding with the best draft.");
+        {
+            if (review.Score >= threshold)
+                ui.Success($"Editor approved the draft (score {review.Score:0.00})");
+            else
+                ui.Warn($"Editor still below threshold (score {review.Score:0.00}) after {AppLimits.MaxEditorRevisions} rewrite(s); proceeding with the best draft");
+        }
     }
 
     // Guarantee every brief URL made it into the body (append a Sources list for any the model dropped).
@@ -151,43 +179,44 @@ try
     if (!ReferenceEquals(ensuredBody, post.BodyHtml))
     {
         post.BodyHtml = ensuredBody;
-        Console.WriteLine("Added a Sources section for brief link(s) the model did not include.");
+        ui.Info("Added a Sources section for brief link(s) the model did not include");
     }
 
     // Links to other sites should open in a new tab; internal links (this blog's domain) stay in-tab.
     post.BodyHtml = ExternalLinks.MarkExternalLinksNewTab(post.BodyHtml, settings.WordPressFolder);
 
-    PrintPost(post);
+    ui.RenderPost(post);
 
     // 3. Select + prepare images.
     var prepared = new List<SelectedImage>();
     if (!noImages && imagesPerPost > 0)
     {
-        Console.WriteLine();
+        ui.Rule("Images");
 
         // 3a. Index the library's tags and pre-select images by tag relevance (cheap, no vision calls).
-        ImageTagCatalog catalog = ImageLibraryScanner.ScanWithTags(
-            settings.ImageLibrary, maxImagesToIndex, new ImageTagReader(), tagPrefix);
-        Console.WriteLine($"Indexed {catalog.Images.Count} image(s) ({catalog.TaggedCount} tagged).");
+        ImageTagCatalog catalog = ui.Status("Indexing image library",
+            () => ImageLibraryScanner.ScanWithTags(settings.ImageLibrary, maxImagesToIndex, new ImageTagReader(), tagPrefix));
+        ui.Success($"Indexed {catalog.Images.Count} image(s) ({catalog.TaggedCount} tagged)");
 
-        IReadOnlyList<string> tagPicked = await TagBasedImageSelector.Create(textClient)
-            .SelectAsync(catalog, post, tagCandidateLimit);
-        Console.WriteLine($"Tag matching selected {tagPicked.Count} image(s).");
+        IReadOnlyList<string> tagPicked = await ui.StatusAsync("Tag matching against the post",
+            () => TagBasedImageSelector.Create(textClient).SelectAsync(catalog, post, tagCandidateLimit));
+        ui.Success($"Tag matching selected {tagPicked.Count} image(s)");
 
         // 3b. Top up with newest images, then vision-score the candidate set against the themes.
         IReadOnlyList<string> candidates = CandidateSet.Build(tagPicked, catalog.NewestPaths, maxImagesToScore);
-        Console.WriteLine($"Vision-scoring {candidates.Count} candidate(s) against themes: " +
-                          $"{string.Join(", ", post.ImageThemes.Select(t => $"{t.Subject} ({t.Description})"))}");
+        ui.Info($"Vision-scoring against themes: {string.Join(", ", post.ImageThemes.Select(t => $"{t.Subject} ({t.Description})"))}");
 
-        var selected = await ImageRelevanceSelector.Create(visionClient).SelectAsync(
-            candidates, post.ImageThemes, post.H1, post.MetaDescription,
-            imagesPerPost, imageDedupThreshold, minImageRelevance,
-            onScored: (i, total, name, score, theme) => Console.WriteLine(
-                double.IsNaN(score)
-                    ? $"  [{i}/{total}] {name} — skipped (unreadable)"
-                    : $"  [{i}/{total}] {name} — relevance {score:0.00} (best theme: {theme})"));
+        var selector = ImageRelevanceSelector.Create(visionClient);
+        var selected = await ui.ProgressAsync("Vision-scoring", candidates.Count, sink =>
+            selector.SelectAsync(
+                candidates, post.ImageThemes, post.H1, post.MetaDescription,
+                imagesPerPost, imageDedupThreshold, minImageRelevance,
+                onScored: (i, total, name, score, theme) => sink(i, total,
+                    double.IsNaN(score)
+                        ? $"{name} — skipped (unreadable)"
+                        : $"{name} — relevance {score:0.00} (best theme: {theme})")));
 
-        Console.WriteLine($"Selected {selected.Count} image(s):");
+        ui.Success($"Selected {selected.Count} image(s)");
         foreach (SelectedImage img in selected)
         {
             string dest = Path.Combine(Path.GetTempPath(), $"wpaiposter-{Guid.NewGuid():N}.jpg");
@@ -195,44 +224,69 @@ try
             tempImages.Add(dest);
             prepared.Add(img with { Path = dest });
             string themeNote = string.IsNullOrEmpty(img.Theme) ? "" : $", theme: {img.Theme}";
-            Console.WriteLine($"  {(img.IsFeatured ? "★ featured " : "  ")}{Path.GetFileName(img.Path)} " +
-                              $"(score {img.Score:0.00}{themeNote}, prepared {size / 1024}KB)");
+            string star = img.IsFeatured ? "★ featured " : "  ";
+            ui.Info($"  {star}{Path.GetFileName(img.Path)} (score {img.Score:0.00}{themeNote}, prepared {size / 1024}KB)");
         }
     }
 
     // 4. Publish.
-    Console.WriteLine(publish ? "Publishing post..." : "Creating draft...");
+    ui.Rule("Publish");
     var publisher = new WpCliPublisher(runner, folder, settings.SeoMetaKeys,
         settings.DefaultCategory ?? AppLimits.DefaultCategory);
-    PublishOutcome outcome = publisher.Publish(post, prepared, publish);
+    PublishOutcome outcome = publisher.Publish(post, prepared, publish, onStep: ui.Info);
 
-    Console.WriteLine($"\nDone. Post ID {outcome.PostId} ({(outcome.Published ? "published" : "draft")}).");
+    ui.Success($"Done. Post ID {outcome.PostId} ({(outcome.Published ? "published" : "draft")})");
     if (outcome.AdminEditUrl is { Length: > 0 })
-        Console.WriteLine($"Edit: {outcome.AdminEditUrl}");
+        ui.Info($"Edit: {outcome.AdminEditUrl}");
     return 0;
 }
 catch (Renci.SshNet.Common.SshException ex)
 {
-    DumpError("SSH error", ex, debug);
+    DumpError("SSH error", ex);
     return 1;
 }
 catch (HttpRequestException ex)
 {
-    DumpError("AI provider connection error", ex, debug);
+    DumpError("AI provider connection error", ex);
     return 1;
 }
 catch (Exception ex)
 {
-    DumpError("Error", ex, debug);
+    DumpError("Error", ex);
     return 1;
 }
 finally
 {
     foreach (string f in tempImages)
         try { File.Delete(f); } catch { /* ignore */ }
+
+    ui.Info($"Full log: {logger.LogPath}");
+    logger.Dispose();
 }
 
 // ---- Helpers --------------------------------------------------------------
+
+void DumpError(string prefix, Exception ex)
+{
+    ui.Error($"{prefix}: {ex.Message}");
+
+    // Full exception chain + stack traces always go to the log file; console shows them only with --debug.
+    for (Exception? e = ex; e is not null; e = e.InnerException)
+    {
+        logger.Write("ERROR", $"--- {e.GetType().FullName}: {e.Message}");
+        logger.Write("ERROR", e.StackTrace ?? "(no stack trace)");
+    }
+
+    if (debug)
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine($"--- {e.GetType().FullName}: {e.Message}");
+            Console.Error.WriteLine(e.StackTrace);
+        }
+    else
+        ui.Info("(re-run with --debug for the full stack trace, or see the log file)");
+}
 
 static string Prompt(string message)
 {
@@ -244,52 +298,6 @@ static string Prompt(string message)
     while ((line = Console.ReadLine()) is not null)
         lines.Add(line);
     return string.Join('\n', lines).Trim();
-}
-
-static void PrintPost(BlogPostResult post)
-{
-    const string rule = "────────────────────────────────────────────────────────";
-    Console.WriteLine();
-    Console.WriteLine(rule);
-    Console.WriteLine($"Meta Title:       {post.MetaTitle}");
-    Console.WriteLine($"Meta Description: {post.MetaDescription}");
-    Console.WriteLine($"H1:               {post.H1}");
-    if (post.ImageThemes.Count > 0)
-        Console.WriteLine($"Image Themes:     {string.Join("; ", post.ImageThemes.Select(t => $"{t.Subject} — {t.Description}"))}");
-    if (post.Tags.Count > 0)
-        Console.WriteLine($"Tags:             {string.Join(", ", post.Tags.Take(AppLimits.MaxPostTags))}");
-    if (post.Categories.Count > 0)
-        Console.WriteLine($"Categories:       {string.Join(", ", post.Categories)}");
-    if (post.InternalLinks.Count > 0)
-    {
-        Console.WriteLine("Internal Links:");
-        foreach (var link in post.InternalLinks)
-            Console.WriteLine($"  - {link.Anchor} → {link.Url}");
-    }
-    if (!string.IsNullOrWhiteSpace(post.Cta))
-        Console.WriteLine($"CTA:              {post.Cta}");
-    Console.WriteLine(rule);
-    Console.WriteLine("Body:");
-    Console.WriteLine(post.BodyHtml);
-    Console.WriteLine(rule);
-}
-
-static void DumpError(string prefix, Exception ex, bool debug)
-{
-    Console.Error.WriteLine($"{prefix}: {ex.Message}");
-    if (!debug)
-    {
-        Console.Error.WriteLine("(re-run with --debug for the full stack trace)");
-        return;
-    }
-
-    // Full exception chain + stack traces.
-    for (Exception? e = ex; e is not null; e = e.InnerException)
-    {
-        Console.Error.WriteLine();
-        Console.Error.WriteLine($"--- {e.GetType().FullName}: {e.Message}");
-        Console.Error.WriteLine(e.StackTrace);
-    }
 }
 
 static string ReadSecret()
@@ -327,9 +335,12 @@ static void PrintUsage()
           --publish        Publish immediately (overrides autoPublish).
           --draft          Force draft (overrides autoPublish).
           --no-images      Skip image selection/upload.
+          --verbose, -v    Show full detail on the console (incl. raw model I/O).
+          --quiet, -q      Only warnings, errors, and the final result.
           --debug          Print full stack traces on error.
           -h, --help       Show this help.
 
+        Every run writes a full log file to the output folder (default ./Output).
         Configuration: app.settings.json (AI + app) and ssh-config.json (SSH).
         """);
 }

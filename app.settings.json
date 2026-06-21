@@ -15,8 +15,9 @@
   "imageDedupThreshold": 6,
   "minImageRelevance": 0.0,
   "defaultCategory": "Blog",
-  "enableEditorReviewer": false,
+  "enableEditorReviewer": true,
   "editorReviewerThreshold": 0.8,
+  "outputFolder": "./Output",
   "seoMetaKeys": {
     "title": "_yoast_wpseo_title",
     "description": "_yoast_wpseo_metadesc"

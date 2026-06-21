@@ -491,6 +491,30 @@ public class EditorReviewerTests
     }
 
     [Fact]
+    public void CombineFeedback_SingleNote_ReturnedUnchanged()
+    {
+        Assert.Equal("Fix the intro.", EditorReviewer.CombineFeedback(new[] { "Fix the intro." }));
+    }
+
+    [Fact]
+    public void CombineFeedback_Empty_ReturnsEmpty()
+    {
+        Assert.Equal("", EditorReviewer.CombineFeedback(Array.Empty<string>()));
+        Assert.Equal("", EditorReviewer.CombineFeedback(new[] { "", "   " }));
+    }
+
+    [Fact]
+    public void CombineFeedback_MultipleRounds_LabelledAndAllRetained()
+    {
+        string combined = EditorReviewer.CombineFeedback(new[] { "Fix the intro.", "Sharpen the takeaway." });
+
+        Assert.Contains("Review round 1:", combined);
+        Assert.Contains("Fix the intro.", combined);          // earlier note retained
+        Assert.Contains("Review round 2:", combined);
+        Assert.Contains("Sharpen the takeaway.", combined);   // latest note included
+    }
+
+    [Fact]
     public async Task ReviewAsync_SendsDraftAndBrief_ReturnsParsedReview()
     {
         var fake = new FakeLlmClient("""{ "score": 0.72, "feedback": "Add a clear takeaway." }""");

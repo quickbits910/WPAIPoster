@@ -11,3 +11,6 @@ id_rsa.*
 *.key
 ssh-config.key
 ssh-config.json
+
+# Per-run log output
+Output/
