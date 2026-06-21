@@ -13,6 +13,7 @@
     "Call to action: {CTA}",
     "",
     "Judge the draft on: a clearly identifiable target reader (who is this for?), a compelling reason to care (why should they keep reading?), one unmistakable main takeaway, logical flow between sections, an engaging and authoritative style (no fluff or passive voice), and sound WordPress/SEO structure.",
+    "The body may include Gutenberg block markup (HTML comments such as <!-- wp:table -->) wrapping tables, lists, code, or preformatted blocks — this is expected and good. Judge whether such formatting genuinely fits the content (e.g. a comparison really earns a table), not its mere presence or absence; never penalise the block comments themselves.",
     "",
     "Score the draft from 0.00 (unpublishable) to 1.00 (excellent, publish as-is).",
     "When the draft falls short, your feedback MUST give specific, actionable instructions to (a) improve the writing flow and style, and (b) add or sharpen content so the piece makes unmistakably clear WHO it is for, WHY they should care, and the single MAIN TAKEAWAY. Refer to concrete sections of the draft; do not be generic.",

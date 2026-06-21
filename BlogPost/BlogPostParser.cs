@@ -75,13 +75,19 @@ public static class BlogPostParser
     /// <summary>
     /// Best-effort repair of JSON that string values broke: re-escapes unescaped double-quotes,
     /// raw newlines/tabs, and other control characters that appear inside string literals. Heuristic —
-    /// a <c>"</c> is treated as the end of a string only when the next non-whitespace char is structural
-    /// (<c>: , } ]</c>) or end-of-input; otherwise it is escaped as part of the content.
+    /// a <c>"</c> is treated as the end of a string based on the next non-whitespace char, but the test
+    /// depends on whether the current string is an object <em>key</em> or a <em>value</em>: a key ends
+    /// before <c>:</c>, a value ends before <c>, } ]</c>. Tracking this lets a value string legitimately
+    /// contain a <c>":</c> sequence — e.g. the Gutenberg block attribute <c>{"ordered":true}</c> embedded
+    /// in body HTML — without the inner quote being mistaken for the closing one.
     /// </summary>
     internal static string RepairJson(string json)
     {
         var sb = new StringBuilder(json.Length + 16);
         bool inString = false;
+        bool stringIsValue = false;            // is the string we're inside a value (vs an object key)?
+        var containerIsArray = new Stack<bool>(); // true = array, false = object
+        char lastStructural = '\0';            // last non-whitespace char seen outside any string
 
         for (int i = 0; i < json.Length; i++)
         {
@@ -90,7 +96,26 @@ public static class BlogPostParser
             if (!inString)
             {
                 sb.Append(c);
-                if (c == '"') inString = true;
+                switch (c)
+                {
+                    case '"':
+                        inString = true;
+                        // A string is an object key only when it opens directly after '{' or ','
+                        // inside an object; everything else (after ':', array elements, top level)
+                        // is a value.
+                        bool inObject = containerIsArray.Count > 0 && !containerIsArray.Peek();
+                        stringIsValue = !(inObject && (lastStructural is '{' or ','));
+                        break;
+                    case '{': containerIsArray.Push(false); lastStructural = c; break;
+                    case '[': containerIsArray.Push(true); lastStructural = c; break;
+                    case '}' or ']':
+                        if (containerIsArray.Count > 0) containerIsArray.Pop();
+                        lastStructural = c;
+                        break;
+                    default:
+                        if (!char.IsWhiteSpace(c)) lastStructural = c;
+                        break;
+                }
                 continue;
             }
 
@@ -108,7 +133,7 @@ public static class BlogPostParser
                     // drop it and let the following char be processed normally on the next iteration.
                     break;
                 case '"':
-                    if (IsStringEnd(json, i))
+                    if (IsStringEnd(json, i, stringIsValue))
                     {
                         sb.Append('"');
                         inString = false;
@@ -135,14 +160,17 @@ public static class BlogPostParser
     private static bool IsValidEscape(char c)
         => c is '"' or '\\' or '/' or 'b' or 'f' or 'n' or 'r' or 't' or 'u';
 
-    /// <summary>True if the quote at <paramref name="quoteIndex"/> looks like a string terminator.</summary>
-    private static bool IsStringEnd(string s, int quoteIndex)
+    /// <summary>
+    /// True if the quote at <paramref name="quoteIndex"/> looks like a string terminator. A value
+    /// string ends before a <c>,</c> <c>}</c> or <c>]</c>; an object key ends before a <c>:</c>.
+    /// </summary>
+    private static bool IsStringEnd(string s, int quoteIndex, bool isValue)
     {
         for (int j = quoteIndex + 1; j < s.Length; j++)
         {
             char c = s[j];
             if (char.IsWhiteSpace(c)) continue;
-            return c is ':' or ',' or '}' or ']';
+            return isValue ? c is ',' or '}' or ']' : c is ':';
         }
         return true; // end of input → must be the closing quote
     }

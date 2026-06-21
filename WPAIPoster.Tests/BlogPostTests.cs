@@ -177,6 +177,44 @@ public class BlogPostParserTests
     }
 
     [Fact]
+    public void Parse_PreservesGutenbergBlockMarkup()
+    {
+        // Tables and bulleted lists use single-quoted attributes only, so the block comments
+        // pass through untouched.
+        const string raw = """{ "h1": "H", "bodyHtml": "<!-- wp:table --><figure class='wp-block-table'><table><tbody><tr><td>a</td></tr></tbody></table></figure><!-- /wp:table --><!-- wp:list --><ul class='wp-block-list'><li>x</li></ul><!-- /wp:list -->" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("<!-- wp:table -->", post.BodyHtml);
+        Assert.Contains("<!-- /wp:table -->", post.BodyHtml);
+        Assert.Contains("<!-- wp:list -->", post.BodyHtml);
+        Assert.Contains("class='wp-block-table'", post.BodyHtml);
+    }
+
+    [Fact]
+    public void Parse_PreservesEscapedOrderedListBlockAttribute()
+    {
+        // The numbered-list block attribute {"ordered":true} is the one expected double-quote;
+        // when correctly escaped the value is valid JSON and must survive verbatim.
+        const string raw = """{ "h1": "H", "bodyHtml": "<!-- wp:list {\"ordered\":true} --><ol class='wp-block-list'><li>one</li></ol><!-- /wp:list -->" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("<!-- wp:list {\"ordered\":true} -->", post.BodyHtml);
+        Assert.Contains("<!-- /wp:list -->", post.BodyHtml);
+    }
+
+    [Fact]
+    public void Parse_RepairsUnescapedOrderedListBlockAttribute()
+    {
+        // If the model forgets to escape the {"ordered":true} quotes, the body is invalid JSON;
+        // RepairJson must re-escape them so the block markup still survives.
+        const string raw = """{ "h1": "H", "bodyHtml": "<!-- wp:list {"ordered":true} --><ol><li>one</li></ol><!-- /wp:list -->" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("<!-- wp:list {\"ordered\":true} -->", post.BodyHtml);
+        Assert.Contains("<!-- /wp:list -->", post.BodyHtml);
+    }
+
+    [Fact]
     public void Parse_NoBody_ThrowsWithRawResponse()
     {
         const string raw = """{ "metaTitle": "T", "h1": "H", "cta": "Go" }""";

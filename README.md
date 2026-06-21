@@ -14,7 +14,8 @@ ask to publish.
 2. It reads your site's existing published posts so it can suggest **real internal links**.
 3. The AI writes the post — meta title, meta description, H1, scannable body with H2/H3 sections, a
    call to action, plus **tags** (up to 5), **categories**, and **image themes** — and returns it as
-   structured data.
+   structured data. To keep posts engaging, it adds **tables, lists, and preformatted/code blocks**
+   where they genuinely help (as native **Gutenberg blocks**), rather than walls of plain paragraphs.
 4. *(Optional)* An **Editor reviewer** LLM critically scores the draft for publish-readiness. If it
    scores below your quality threshold, the post is **rewritten** with the editor's feedback (clarity of
    audience, why-it-matters, the main takeaway, flow and style) — up to two rounds. Off by default.

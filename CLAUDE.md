@@ -73,7 +73,18 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   JSON envelope. `BlogPostParser` tolerates ```json fences and surrounding prose — keep it that way. It
   also **repairs** common LLM-JSON breakage via `RepairJson` (a two-pass parse): unescaped `"` inside
   string values, raw newlines/control chars, and bogus backslash escapes like `\'` (dropped, since they
-  aren't valid JSON escapes). Tests cover each case.
+  aren't valid JSON escapes). `RepairJson` is **key/value-aware** — it tracks an object-vs-array
+  container stack so a *value* string may legitimately contain a `":` sequence (e.g. the Gutenberg block
+  attribute `{"ordered":true}` embedded in body HTML) without the inner quote being mistaken for the
+  string terminator. Tests cover each case.
+- **Rich body formatting**: the blog prompt encourages the model to lift posts above plain prose with
+  **tables, lists, code, and preformatted blocks** *where they genuinely help* (code blocks only for
+  technical topics), each wrapped in its **Gutenberg block comment** (`<!-- wp:table -->`, `<!-- wp:list -->`,
+  `<!-- wp:code -->`, `<!-- wp:preformatted -->`) so the block editor treats them as native blocks;
+  paragraphs/headings stay plain HTML. The publish path is byte-transparent (SFTP'd file → `wp post create`),
+  and WordPress `kses` keeps these tags **and** HTML comments, so the block markup survives to the editor.
+  HTML attributes use single quotes; the lone double-quote case is the numbered-list `{"ordered":true}`
+  attribute (escaped, with `RepairJson` as the safety net).
 - **Image themes** are `{ subject, description }` objects (`ImageTheme`). The **subject** is a short
   taggable noun used by tag matching + display; the **description** is a disambiguating phrase used in the
   vision-scoring prompt (e.g. "network" → "interconnected computer network"). `ImageThemeListConverter`
