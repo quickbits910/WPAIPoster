@@ -72,11 +72,17 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 - **Structured output**: the model is instructed (in `Prompts/blog-post-prompt.json`) to return a strict
   JSON envelope. `BlogPostParser` tolerates ```json fences and surrounding prose — keep it that way. It
   also **repairs** common LLM-JSON breakage via `RepairJson` (a two-pass parse): unescaped `"` inside
-  string values, raw newlines/control chars, and bogus backslash escapes like `\'` (dropped, since they
-  aren't valid JSON escapes). `RepairJson` is **key/value-aware** — it tracks an object-vs-array
-  container stack so a *value* string may legitimately contain a `":` sequence (e.g. the Gutenberg block
-  attribute `{"ordered":true}` embedded in body HTML) without the inner quote being mistaken for the
-  string terminator. Tests cover each case.
+  string values, raw newlines/control chars (e.g. the literal newlines a model emits inside a `<pre>`/
+  `<code>` block), and bogus backslash escapes like `\'` (dropped, since they aren't valid JSON escapes).
+  It also **strips bare non-JSON garbage** the model leaks into a *structural* position — a stray
+  `<em>,` array element, an HTML tag where a value belongs — since that junk lives outside any string and
+  so can't be string-repaired; left alone, one bad element would sink the whole envelope even though the
+  body and every other field are recoverable. Outside a string the only legal bare tokens are the
+  literals `true`/`false`/`null` and numbers (preserved); anything else is dropped, with the dangling
+  comma collapsed (array element) or replaced by `null` (object value). `RepairJson` is **key/value-aware**
+  — it tracks an object-vs-array container stack so a *value* string may legitimately contain a `":`
+  sequence (e.g. the Gutenberg block attribute `{"ordered":true}` embedded in body HTML) without the
+  inner quote being mistaken for the string terminator. Tests cover each case.
 - **Rich body formatting**: the blog prompt encourages the model to lift posts above plain prose with
   **tables, lists, code, and preformatted blocks** *where they genuinely help* (code blocks only for
   technical topics), each wrapped in its **Gutenberg block comment** (`<!-- wp:table -->`, `<!-- wp:list -->`,

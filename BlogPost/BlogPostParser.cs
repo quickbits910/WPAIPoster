@@ -95,6 +95,49 @@ public static class BlogPostParser
 
             if (!inString)
             {
+                // Drop / repair bare non-JSON garbage the model leaked into a structural position
+                // (e.g. a stray "<em>," array element). Outside a string the only legal bare tokens
+                // are the literals true/false/null and numbers; anything else is junk that would
+                // otherwise sink the whole envelope even after every string value was repaired.
+                if (!char.IsWhiteSpace(c) && c is not ('{' or '}' or '[' or ']' or ':' or ',' or '"'))
+                {
+                    int tokenEnd = i;
+                    while (tokenEnd < json.Length)
+                    {
+                        char t = json[tokenEnd];
+                        if (char.IsWhiteSpace(t) || t is '{' or '}' or '[' or ']' or ':' or ',' or '"') break;
+                        tokenEnd++;
+                    }
+                    string token = json[i..tokenEnd];
+
+                    if (IsJsonLiteral(token))
+                    {
+                        sb.Append(token);
+                        lastStructural = token[^1];
+                    }
+                    else if (LastSignificant(sb) == ':')
+                    {
+                        // Garbage in object-value position — substitute null so the object stays well-formed.
+                        sb.Append("null");
+                        lastStructural = 'l';
+                    }
+                    else
+                    {
+                        // Garbage as an array element / value — drop it, and swallow a now-redundant
+                        // following comma so the container isn't left with an empty element ([a, ,b]).
+                        int j = tokenEnd;
+                        while (j < json.Length && char.IsWhiteSpace(json[j])) j++;
+                        if (j < json.Length && json[j] == ',')
+                        {
+                            tokenEnd = j + 1;
+                            lastStructural = ',';
+                        }
+                    }
+
+                    i = tokenEnd - 1;
+                    continue;
+                }
+
                 sb.Append(c);
                 switch (c)
                 {
@@ -159,6 +202,25 @@ public static class BlogPostParser
     /// <summary>The characters that legally follow a backslash inside a JSON string.</summary>
     private static bool IsValidEscape(char c)
         => c is '"' or '\\' or '/' or 'b' or 'f' or 'n' or 'r' or 't' or 'u';
+
+    /// <summary>The last non-whitespace char already written, or '\0' if none — used to tell whether
+    /// dropped garbage sat in object-value position (after a <c>:</c>).</summary>
+    private static char LastSignificant(StringBuilder sb)
+    {
+        for (int k = sb.Length - 1; k >= 0; k--)
+            if (!char.IsWhiteSpace(sb[k])) return sb[k];
+        return '\0';
+    }
+
+    /// <summary>True if a bare token outside any string is a legal JSON literal (true/false/null or a number).</summary>
+    private static bool IsJsonLiteral(string token)
+    {
+        if (token is "true" or "false" or "null") return true;
+        if (token.Length == 0 || token[0] is not ('-' or '+' or (>= '0' and <= '9'))) return false;
+        return double.TryParse(token,
+            System.Globalization.NumberStyles.Float | System.Globalization.NumberStyles.AllowLeadingSign,
+            System.Globalization.CultureInfo.InvariantCulture, out _);
+    }
 
     /// <summary>
     /// True if the quote at <paramref name="quoteIndex"/> looks like a string terminator. A value

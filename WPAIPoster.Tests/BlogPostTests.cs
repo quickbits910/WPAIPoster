@@ -215,6 +215,60 @@ public class BlogPostParserTests
     }
 
     [Fact]
+    public void Parse_DropsStrayGarbageArrayElement()
+    {
+        // A weak model leaked a bare "<em>," token where an array element should be. It isn't inside
+        // a string, so it can't be string-repaired; RepairJson must drop it (and the dangling comma)
+        // rather than let one junk element sink the whole envelope.
+        const string raw = """
+            { "h1": "H", "bodyHtml": "<p>Body</p>",
+              "imageThemes": [
+                { "subject": "document", "description": "a doc" },
+                <em>,
+                { "subject": "network", "description": "a net" }
+              ] }
+            """;
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("<p>Body</p>", post.BodyHtml);
+        Assert.Equal(2, post.ImageThemes.Count);
+        Assert.Equal("document", post.ImageThemes[0].Subject);
+        Assert.Equal("network", post.ImageThemes[1].Subject);
+    }
+
+    [Fact]
+    public void Parse_DropsTrailingGarbageArrayElement()
+    {
+        // Garbage as the final element leaves a trailing comma, which AllowTrailingCommas tolerates.
+        const string raw = """{ "h1": "H", "bodyHtml": "<p>B</p>", "tags": ["a", "b", <junk>] }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Equal(new[] { "a", "b" }, post.Tags);
+    }
+
+    [Fact]
+    public void Parse_RepairsRawNewlinesInPreformattedBlock()
+    {
+        // <pre>/<code> blocks carry literal newlines the model emits unescaped inside bodyHtml.
+        const string raw = "{ \"h1\": \"H\", \"bodyHtml\": \"<pre>line one\nline two</pre>\" }";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("line one\nline two", post.BodyHtml);
+    }
+
+    [Fact]
+    public void Parse_PreservesValidLiteralsAndNumbers_WhenRepairing()
+    {
+        // The raw newline forces the repair pass; garbage-stripping in that pass must NOT eat
+        // legitimate bare literals (true/false/null) or numbers sitting in value position.
+        const string raw = "{ \"h1\": \"H\", \"bodyHtml\": \"<pre>a\nb</pre>\", "
+                          + "\"draft\": true, \"rank\": -3.5, \"note\": null }";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("a\nb", post.BodyHtml);
+    }
+
+    [Fact]
     public void Parse_NoBody_ThrowsWithRawResponse()
     {
         const string raw = """{ "metaTitle": "T", "h1": "H", "cta": "Go" }""";
