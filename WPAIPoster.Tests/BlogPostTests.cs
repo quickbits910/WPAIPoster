@@ -386,6 +386,32 @@ public class BriefLinksTests
     }
 
     [Theory]
+    [InlineData("Run it at http://localhost:8000/query for testing.")]
+    [InlineData("Point to http://127.0.0.1:5000 locally.")]
+    [InlineData("Ollama runs on http://localhost:11434")]
+    [InlineData("A 127.x address http://127.0.0.1/path")]
+    [InlineData("Other loopback http://127.5.5.5:9000/x")]
+    public void ExtractUrls_ExcludesLoopbackUrls(string brief)
+    {
+        Assert.Empty(BriefLinks.ExtractUrls(brief));
+    }
+
+    [Fact]
+    public void ExtractUrls_MixedBrief_KeepsPublicDropsLoopback()
+    {
+        const string brief = """
+            Clone https://github.com/x/y then start the server on http://localhost:8000/query.
+            Configure an Ollama endpoint at http://localhost:11434 and read https://docs.test/guide.
+            """;
+
+        var urls = BriefLinks.ExtractUrls(brief);
+
+        Assert.Equal(
+            new[] { "https://github.com/x/y", "https://docs.test/guide" },
+            urls);
+    }
+
+    [Theory]
     [InlineData("https://www.github.com/x/y", "github.com/x/y")]
     [InlineData("https://example.com/", "example.com")]
     [InlineData("http://sub.test/a/b", "sub.test/a/b")]

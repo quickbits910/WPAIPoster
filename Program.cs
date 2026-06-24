@@ -202,7 +202,7 @@ try
             () => TagBasedImageSelector.Create(textClient).SelectAsync(catalog, post, tagCandidateLimit));
         ui.Success($"Tag matching selected {tagPicked.Count} image(s)");
 
-        // 3b. Top up with newest images, then vision-score the candidate set against the themes.
+        // 3b. Top up with the newest images, then vision-score the candidate set against the themes.
         IReadOnlyList<string> candidates = CandidateSet.Build(tagPicked, catalog.NewestPaths, maxImagesToScore);
         ui.Info($"Vision-scoring against themes: {string.Join(", ", post.ImageThemes.Select(t => $"{t.Subject} ({t.Description})"))}");
 

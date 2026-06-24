@@ -26,11 +26,17 @@ public static partial class BriefLinks
             string url = TrimTrailingPunctuation(m.Value);
             if (url.Length == 0)
                 continue;
+            if (IsLoopback(url))
+                continue;   // localhost / 127.0.0.0/8 / ::1 — local services, never publishable links
             if (seen.Add(Normalize(url)))
                 result.Add(url);
         }
         return result;
     }
+
+    /// <summary>True when <paramref name="url"/> points at a loopback host (localhost, 127.0.0.0/8, ::1).</summary>
+    private static bool IsLoopback(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) && uri.IsLoopback;
 
     /// <summary>Compact, human-readable anchor for a URL: scheme and leading "www." stripped, no trailing slash.</summary>
     public static string ReadableAnchor(string url)
