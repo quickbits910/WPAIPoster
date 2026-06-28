@@ -46,7 +46,10 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         double minRelevance = AppLimits.DefaultMinImageRelevance,
         Action<int, int, string, double, string?>? onScored = null,
         IReadOnlySet<ulong>? recentFeaturedHashes = null,
-        int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold)
+        int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold,
+        IReadOnlyDictionary<string, double>? userTagAffinity = null,
+        double selectionWeight = AppLimits.DefaultUserTagSelectionWeight,
+        double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight)
     {
         // With no themes, fall back to a single combined pseudo-theme (legacy single-score behaviour).
         IReadOnlyList<ImageTheme> themes = imageThemes.Count > 0
@@ -95,7 +98,8 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         }
 
         return Select(scored, subjects, count, hammingThreshold, minRelevance,
-            recentFeaturedHashes, recentFeaturedThreshold);
+            recentFeaturedHashes, recentFeaturedThreshold,
+            userTagAffinity, selectionWeight, featuredWeight);
     }
 
     /// <summary>
@@ -129,12 +133,23 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
     /// which chosen image is featured — colliding images may still be attached inline — and falls back
     /// to the highest-scoring pick if every chosen image collides.
     /// </para>
+    /// <para>
+    /// When <paramref name="userTagAffinity"/> is supplied (path → fraction of the author's
+    /// <c>[TAGS:]</c> matched, 0-1), it boosts an image's effective score when filling leftover slots
+    /// (by <paramref name="selectionWeight"/>) and, more strongly, in the featured blend
+    /// (<c>visionScore + <paramref name="featuredWeight"/> × affinity</c>). Theme coverage stays purely
+    /// vision-driven; affinity defaults to 0 for any path not in the map, so an absent map reproduces the
+    /// pure-vision behaviour exactly.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<SelectedImage> Select(
         IReadOnlyList<ScoredImage> scored, IReadOnlyList<string> themes, int count, int hammingThreshold,
         double minRelevance = 0.0,
         IReadOnlySet<ulong>? recentFeaturedHashes = null,
-        int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold)
+        int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold,
+        IReadOnlyDictionary<string, double>? userTagAffinity = null,
+        double selectionWeight = AppLimits.DefaultUserTagSelectionWeight,
+        double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight)
     {
         count = Math.Max(0, count);
         if (count == 0 || scored.Count == 0)
@@ -150,6 +165,10 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
 
         double MaxScore(int img) =>
             scored[img].Scores.Count > 0 ? scored[img].Scores.Max() : 0.0;
+
+        // Author-tag affinity for an image (0 when no map / path absent). Boosts fill ordering and the
+        // featured blend, but never theme coverage or the relevance floor.
+        double Aff(int img) => userTagAffinity?.GetValueOrDefault(scored[img].Path) ?? 0.0;
 
         int BestTheme(int img)
         {
@@ -175,7 +194,7 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         {
             foreach (int img in Enumerable.Range(0, scored.Count)
                          .Where(img => Eligible(img) && ok(img))
-                         .OrderByDescending(MaxScore)
+                         .OrderByDescending(img => MaxScore(img) + selectionWeight * Aff(img))
                          .ThenBy(img => scored[img].Path, StringComparer.Ordinal))
             {
                 if (chosen.Count >= count) return;
@@ -218,11 +237,11 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         if (chosen.Count == 0)
             return Array.Empty<SelectedImage>();
 
-        // 5) Featured = highest-scoring chosen image, but steered away from any image matching a recent
-        //    post's featured image (by perceptual hash). If every chosen image collides — or no history
-        //    was supplied — fall back to the plain highest-scoring pick.
+        // 5) Featured = highest-blend chosen image (vision score + author-tag affinity), but steered away
+        //    from any image matching a recent post's featured image (by perceptual hash). If every chosen
+        //    image collides — or no history was supplied — fall back to the plain highest-blend pick.
         var byScore = chosen
-            .OrderByDescending(c => MaxScore(c.Img))
+            .OrderByDescending(c => MaxScore(c.Img) + featuredWeight * Aff(c.Img))
             .ThenBy(c => scored[c.Img].Path, StringComparer.Ordinal)
             .ToList();
 

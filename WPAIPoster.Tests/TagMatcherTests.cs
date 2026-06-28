@@ -140,4 +140,41 @@ public class TagMatcherTests
         });
         Assert.Empty(TagMatcher.Rank(catalog, Array.Empty<TagMatcher.WeightedTokens>(), 5));
     }
+
+    // ---- MatchFraction (author-tag affinity) ----
+
+    [Fact]
+    public void MatchFraction_FractionOfDistinctTokensMatched()
+    {
+        // 1 of the 2 author tokens ("agent") is matched by the image's tags.
+        Assert.Equal(0.5, TagMatcher.MatchFraction(new[] { "agent", "robot" }, new[] { "agent", "mcp" }), 3);
+    }
+
+    [Fact]
+    public void MatchFraction_AllMatched_IsOne()
+    {
+        Assert.Equal(1.0, TagMatcher.MatchFraction(new[] { "agent", "mcp" }, new[] { "agent", "mcp" }), 3);
+    }
+
+    [Fact]
+    public void MatchFraction_NoneMatched_IsZero()
+    {
+        Assert.Equal(0.0, TagMatcher.MatchFraction(new[] { "mountain" }, new[] { "agent", "mcp" }), 3);
+    }
+
+    [Fact]
+    public void MatchFraction_EmptyTokens_IsZero()
+    {
+        Assert.Equal(0.0, TagMatcher.MatchFraction(new[] { "agent" }, Array.Empty<string>()), 3);
+    }
+
+    [Fact]
+    public void MatchFraction_UsesFlexibleStemSubstringMatching()
+    {
+        // "agents" (image tag) matches the "agent" token via plural stem; "workflow|automation" drops
+        // the attribute label so "automation" matches.
+        var frac = TagMatcher.MatchFraction(
+            new[] { "agents", "workflow|automation" }, new[] { "agent", "automation" });
+        Assert.Equal(1.0, frac, 3);
+    }
 }

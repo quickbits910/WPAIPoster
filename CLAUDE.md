@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (250 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (259 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -114,9 +114,10 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   same hero image, `FeaturedHistoryFetcher` (`Wordpress/`) recovers identity by **content**: `wp post list`
   (recent, date-desc) → `_thumbnail_id` meta → attachment `guid` (URL) → HTTP download → `PerceptualHash.Compute`.
   The resulting dHash set is passed into `ImageRelevanceSelector.Select`, whose **step 5** picks the
-  highest-scoring chosen image *not* within `recentFeaturedHammingThreshold` of any recent featured hash —
+  highest-**blend** chosen image *not* within `recentFeaturedHammingThreshold` of any recent featured hash —
   influencing only which image is **featured** (collisions can still appear inline), with a graceful
-  fallback to the best pick if all collide. Every step is best-effort (skips posts without a featured
+  fallback to the best pick if all collide. Recency takes priority over the author-tag blend: a strongly
+  tagged image that collides with a recent featured hash is skipped in favour of the next blended pick. Every step is best-effort (skips posts without a featured
   image, failed lookups, undecodable downloads) and the whole lookup is skipped when
   `avoidRecentFeaturedImages` is false. The HTTP download is injected as a `Func<string, Stream?>` so the
   orchestration is unit-testable offline; `ParsePostIds` is a pure helper. The publish path is **unchanged**
@@ -135,7 +136,12 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 - **Author `[TAGS:]` directive**: the brief may include `[TAGS: Agent, Workflow, MCP]`. `BriefTags.Parse`
   (pure) extracts these as the highest-priority "UserProvided" signal for image selection and **strips**
   the directive from the brief so it never reaches the generator or the published post. Parsed in
-  `Program.cs` right after the brief is resolved.
+  `Program.cs` right after the brief is resolved. Beyond weighting the tag-match shortlist, the tags also
+  feed the **vision stage**: `Program.cs` builds a per-candidate *affinity* (`TagMatcher.MatchFraction` —
+  fraction of author tags an image's tags match, 0-1) and passes it to `ImageRelevanceSelector.Select`,
+  which boosts fill-slot ordering (`DefaultUserTagSelectionWeight`) and, more strongly, the featured blend
+  `visionScore + DefaultUserTagFeaturedWeight × affinity`. Theme coverage stays purely vision-driven, and
+  an absent affinity map reproduces the pure-vision behaviour exactly.
 - **Multi-line brief input**: the interactive `Prompt` in `Program.cs` reads stdin until **EOF (Ctrl-D)**,
   not a single line, so pasted multi-line briefs (tables, code) are captured whole.
 - **Terminal UI + logging** (`Ui/`): all pipeline output goes through the `Ui` facade (Spectre.Console —

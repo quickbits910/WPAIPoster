@@ -106,6 +106,21 @@ public static partial class TagMatcher
         return best;
     }
 
+    /// <summary>
+    /// Fraction of distinct <paramref name="tokens"/> matched by any of <paramref name="imageTags"/>
+    /// (flexible substring/plural/stem matching), in [0, 1]. 0 when there are no tokens. Used to rank
+    /// images by how strongly they match the author's <c>[TAGS:]</c> keywords.
+    /// </summary>
+    public static double MatchFraction(IReadOnlyList<string> imageTags, IReadOnlyCollection<string> tokens)
+    {
+        if (tokens.Count == 0)
+            return 0.0;
+
+        int matched = tokens.Count(token =>
+            imageTags.Any(tag => TagWords(tag).Any(word => WordsMatch(word, token))));
+        return (double)matched / tokens.Count;
+    }
+
     private static bool TagMatchesAny(string tag, IReadOnlyCollection<string> tokens)
     {
         foreach (string word in TagWords(tag))

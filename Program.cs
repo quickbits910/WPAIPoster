@@ -228,6 +228,20 @@ try
                 ui.Success($"Loaded {recentFeatured.Count} recent featured fingerprint(s) to avoid");
         }
 
+        // Author "[TAGS:]" affinity per candidate (fraction of the author's tags an image's tags match):
+        // nudges fill-slot selection and, more strongly, the featured pick. Empty/absent when no tags.
+        IReadOnlyDictionary<string, double>? userTagAffinity = null;
+        if (userTags.Count > 0)
+        {
+            IReadOnlyCollection<string> userTokens = TagMatcher.TokenizeWords(userTags);
+            var tagsByPath = catalog.Images.ToDictionary(i => i.Path, i => i.Tags);
+            userTagAffinity = candidates.Distinct().ToDictionary(
+                path => path,
+                path => tagsByPath.TryGetValue(path, out var tags)
+                    ? TagMatcher.MatchFraction(tags, userTokens)
+                    : 0.0);
+        }
+
         var selector = ImageRelevanceSelector.Create(visionClient);
         var selected = await ui.ProgressAsync("Vision-scoring", candidates.Count, sink =>
             selector.SelectAsync(
@@ -238,7 +252,8 @@ try
                         ? $"{name} — skipped (unreadable)"
                         : $"{name} — relevance {score:0.00} (best theme: {theme})"),
                 recentFeaturedHashes: recentFeatured,
-                recentFeaturedThreshold: recentFeaturedThreshold));
+                recentFeaturedThreshold: recentFeaturedThreshold,
+                userTagAffinity: userTagAffinity));
 
         ui.Success($"Selected {selected.Count} image(s)");
         foreach (SelectedImage img in selected)
@@ -249,7 +264,9 @@ try
             prepared.Add(img with { Path = dest });
             string themeNote = string.IsNullOrEmpty(img.Theme) ? "" : $", theme: {img.Theme}";
             string star = img.IsFeatured ? "★ featured " : "  ";
-            ui.Info($"  {star}{Path.GetFileName(img.Path)} (score {img.Score:0.00}{themeNote}, prepared {size / 1024}KB)");
+            bool tagMatch = (userTagAffinity?.GetValueOrDefault(img.Path) ?? 0.0) > 0;
+            string tagNote = img.IsFeatured && tagMatch ? ", author-tag match" : "";
+            ui.Info($"  {star}{Path.GetFileName(img.Path)} (score {img.Score:0.00}{themeNote}{tagNote}, prepared {size / 1024}KB)");
         }
     }
 

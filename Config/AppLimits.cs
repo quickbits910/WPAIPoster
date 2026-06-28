@@ -46,6 +46,19 @@ public static class AppLimits
     public const int TagWeightBodyBackground = 1;
 
     /// <summary>
+    /// How much an image's author-tag affinity (fraction of <c>[TAGS:]</c> matched, 0-1) boosts its
+    /// vision score when filling leftover image slots. Modest — vision relevance still dominates.
+    /// </summary>
+    public const double DefaultUserTagSelectionWeight = 0.25;
+
+    /// <summary>
+    /// How much an image's author-tag affinity (0-1) weighs in the featured-image blend
+    /// (<c>visionScore + weight × affinity</c>). Larger than the selection weight so author tags pull
+    /// harder on the hero pick, but not so large that a far-better vision match is overridden.
+    /// </summary>
+    public const double DefaultUserTagFeaturedWeight = 0.50;
+
+    /// <summary>
     /// Default max Hamming distance (over the 64-bit perceptual dHash) at which two images are treated
     /// as near-identical and not both selected. ~0-6 ≈ visually the same image.
     /// </summary>

@@ -186,6 +186,12 @@ The directive is **stripped from the brief** before the post is written, so it o
 selection — it never appears in the published content. Tags are comma-separated, trimmed, and
 case-insensitively deduped.
 
+These tags carry through the whole image pipeline: they top the shortlist weighting, give a gentle
+boost when filling image slots, and — **most strongly** — steer the **featured (hero) image**, which is
+chosen by a blend of vision relevance *plus* how well the image's own tags match your `[TAGS:]`. The
+no-repeat-hero rule still wins, though: if your best-matching image was recently used as another post's
+featured image, the next-best match is featured instead.
+
 ### Options
 
 | Flag | Effect |

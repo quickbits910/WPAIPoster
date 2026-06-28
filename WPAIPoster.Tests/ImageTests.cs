@@ -214,6 +214,85 @@ public class ImageRelevanceSelectorTests
         Assert.Equal("a.jpg", picks.Single(p => p.IsFeatured).Path);
     }
 
+    // ---- Author-tag affinity (userTagAffinity) ----
+
+    [Fact]
+    public void Select_AuthorTagAffinity_BlendsIntoFeaturedPick()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.6 }, hash: 0x0),
+            Img("b.jpg", new[] { 0.5 }, hash: 0xFFFFFFFFFFFFFFFF),
+        };
+        var affinity = new Dictionary<string, double> { ["b.jpg"] = 1.0 }; // a.jpg absent → 0
+
+        // Blend (featuredWeight 0.5): a = 0.6, b = 0.5 + 0.5·1.0 = 1.0 → 'b' becomes featured.
+        var withTags = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup, userTagAffinity: affinity);
+        Assert.Equal("b.jpg", withTags.Single(p => p.IsFeatured).Path);
+        Assert.Equal(new[] { "a.jpg", "b.jpg" }, withTags.Select(p => p.Path).OrderBy(p => p));
+
+        // Regression: with no affinity map, the pure-vision best ('a') is featured.
+        var noTags = ImageRelevanceSelector.Select(scored, Themes(1), count: 2, hammingThreshold: NoDedup);
+        Assert.Equal("a.jpg", noTags.Single(p => p.IsFeatured).Path);
+    }
+
+    [Fact]
+    public void Select_AuthorTagAffinity_DoesNotOverrideFarBetterVisionScore()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.95 }, hash: 0x0),
+            Img("b.jpg", new[] { 0.40 }, hash: 0xFFFFFFFFFFFFFFFF),
+        };
+        var affinity = new Dictionary<string, double> { ["b.jpg"] = 1.0 };
+
+        // a = 0.95 vs b = 0.40 + 0.5 = 0.90 → vision still wins.
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup, userTagAffinity: affinity);
+        Assert.Equal("a.jpg", picks.Single(p => p.IsFeatured).Path);
+    }
+
+    [Fact]
+    public void Select_AuthorTagAffinity_RecentFeaturedStillSkipsCollision()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.5 }, hash: 0x0),                  // top blend, but recently featured
+            Img("c.jpg", new[] { 0.6 }, hash: 0xFFFFFFFFFFFFFFFF),   // distinct
+        };
+        var affinity = new Dictionary<string, double> { ["a.jpg"] = 1.0 }; // a blend = 1.0, c = 0.6
+        var recent = new HashSet<ulong> { 0x0 };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup,
+            recentFeaturedHashes: recent, recentFeaturedThreshold: 2, userTagAffinity: affinity);
+
+        // Variety wins: the high-affinity 'a' collides with a recent featured image, so 'c' is featured.
+        Assert.Equal("c.jpg", picks.Single(p => p.IsFeatured).Path);
+        Assert.Equal(new[] { "a.jpg", "c.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+    }
+
+    [Fact]
+    public void Select_AuthorTagAffinity_BoostsFillSlotOrdering()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.9 }, hash: 0x0),                  // theme winner
+            Img("b.jpg", new[] { 0.30 }, hash: 0x00FF),              // lower vision, high affinity
+            Img("c.jpg", new[] { 0.35 }, hash: 0xFFFFFFFFFFFFFFFF),  // higher vision, no affinity
+        };
+        var affinity = new Dictionary<string, double> { ["b.jpg"] = 1.0 };
+
+        // One theme, two slots: 'a' covers it; the single fill slot ranks b = 0.30 + 0.25·1.0 = 0.55
+        // above c = 0.35 → 'b' fills, not 'c'.
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup, userTagAffinity: affinity);
+
+        Assert.Equal(new[] { "a.jpg", "b.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+        Assert.DoesNotContain("c.jpg", picks.Select(p => p.Path));
+    }
+
     [Fact]
     public void Select_SkipsPerceptualNearDuplicate()
     {
