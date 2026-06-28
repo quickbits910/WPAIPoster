@@ -39,6 +39,22 @@ public static class AppLimits
     /// </summary>
     public const double DefaultMinImageRelevance = 0.0;
 
+    /// <summary>
+    /// When true, the featured image is steered away from any image matching a recent post's featured
+    /// image (by perceptual hash), so consecutive posts don't reuse the same hero image.
+    /// </summary>
+    public const bool DefaultAvoidRecentFeaturedImages = true;
+
+    /// <summary>Default number of recent published posts whose featured images are avoided.</summary>
+    public const int DefaultRecentFeaturedHistoryCount = 10;
+
+    /// <summary>
+    /// Default max Hamming distance at which a candidate is treated as the SAME image as a recent
+    /// featured one (and therefore not re-featured). Tighter than the in-post dedup threshold — we want
+    /// "the same hero image", not merely "similar". ~0-4 ≈ the same image after WP's re-encode.
+    /// </summary>
+    public const int DefaultRecentFeaturedHammingThreshold = 4;
+
     /// <summary>Maximum number of post tags applied to a published post.</summary>
     public const int MaxPostTags = 5;
 

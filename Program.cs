@@ -87,6 +87,9 @@ string tagPrefix = settings.TagPrefix ?? AppLimits.DefaultTagPrefix;
 int tagCandidateLimit = settings.TagCandidateLimit ?? AppLimits.DefaultTagCandidateLimit;
 int imageDedupThreshold = settings.ImageDedupThreshold ?? AppLimits.DefaultImageDedupThreshold;
 double minImageRelevance = settings.MinImageRelevance ?? AppLimits.DefaultMinImageRelevance;
+bool avoidRecentFeatured = settings.AvoidRecentFeaturedImages ?? AppLimits.DefaultAvoidRecentFeaturedImages;
+int recentFeaturedHistoryCount = settings.RecentFeaturedHistoryCount ?? AppLimits.DefaultRecentFeaturedHistoryCount;
+int recentFeaturedThreshold = settings.RecentFeaturedHammingThreshold ?? AppLimits.DefaultRecentFeaturedHammingThreshold;
 string outputFolder = settings.OutputFolder ?? AppLimits.DefaultOutputFolder;
 
 // ---- Logging + UI ---------------------------------------------------------
@@ -206,6 +209,19 @@ try
         IReadOnlyList<string> candidates = CandidateSet.Build(tagPicked, catalog.NewestPaths, maxImagesToScore);
         ui.Info($"Vision-scoring against themes: {string.Join(", ", post.ImageThemes.Select(t => $"{t.Subject} ({t.Description})"))}");
 
+        // 3c. Avoid reusing a recent post's featured image: fetch the last N featured images (by content
+        //     hash, since the local→WordPress filename link is lost on upload) so the featured pick steers
+        //     clear of them. Best-effort — failures just mean no exclusion.
+        IReadOnlySet<ulong> recentFeatured = new HashSet<ulong>();
+        if (avoidRecentFeatured)
+        {
+            recentFeatured = ui.Status("Fetching recent featured images to avoid repeats",
+                () => new FeaturedHistoryFetcher(runner, folder, DownloadImageStream)
+                    .FetchRecentFeaturedHashes(recentFeaturedHistoryCount));
+            if (recentFeatured.Count > 0)
+                ui.Success($"Loaded {recentFeatured.Count} recent featured fingerprint(s) to avoid");
+        }
+
         var selector = ImageRelevanceSelector.Create(visionClient);
         var selected = await ui.ProgressAsync("Vision-scoring", candidates.Count, sink =>
             selector.SelectAsync(
@@ -214,7 +230,9 @@ try
                 onScored: (i, total, name, score, theme) => sink(i, total,
                     double.IsNaN(score)
                         ? $"{name} — skipped (unreadable)"
-                        : $"{name} — relevance {score:0.00} (best theme: {theme})")));
+                        : $"{name} — relevance {score:0.00} (best theme: {theme})"),
+                recentFeaturedHashes: recentFeatured,
+                recentFeaturedThreshold: recentFeaturedThreshold));
 
         ui.Success($"Selected {selected.Count} image(s)");
         foreach (SelectedImage img in selected)
@@ -265,6 +283,24 @@ finally
 }
 
 // ---- Helpers --------------------------------------------------------------
+
+// Downloads an image over HTTP into memory for perceptual hashing (recent featured-image lookup).
+// Returns null on any failure so the caller can skip it gracefully.
+Stream? DownloadImageStream(string url)
+{
+    try
+    {
+        using HttpResponseMessage resp = http.GetAsync(url).GetAwaiter().GetResult();
+        if (!resp.IsSuccessStatusCode)
+            return null;
+        byte[] bytes = resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        return new MemoryStream(bytes);
+    }
+    catch
+    {
+        return null;
+    }
+}
 
 void DumpError(string prefix, Exception ex)
 {

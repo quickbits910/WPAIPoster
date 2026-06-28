@@ -161,6 +161,60 @@ public class ImageRelevanceSelectorTests
     }
 
     [Fact]
+    public void Select_AvoidsRecentFeatured_ForFeaturedPickButStillSelectsImage()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.9 }, hash: 0x0),                  // best, but matches a recent featured image
+            Img("c.jpg", new[] { 0.7 }, hash: 0xFFFFFFFFFFFFFFFF),   // visually distinct
+        };
+        var recent = new HashSet<ulong> { 0x0 };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup,
+            recentFeaturedHashes: recent, recentFeaturedThreshold: 2);
+
+        // Both images are still attached…
+        Assert.Equal(new[] { "a.jpg", "c.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+        // …but the recently-featured 'a' is NOT the featured pick; the next-best non-colliding one is.
+        Assert.Equal("c.jpg", picks.Single(p => p.IsFeatured).Path);
+    }
+
+    [Fact]
+    public void Select_RecentFeatured_AllCandidatesCollide_FallsBackToBest()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.9 }, hash: 0x0),
+            Img("c.jpg", new[] { 0.7 }, hash: 0xFFFFFFFFFFFFFFFF),
+        };
+        var recent = new HashSet<ulong> { 0x0, 0xFFFFFFFFFFFFFFFF }; // both chosen images match recent featured
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup,
+            recentFeaturedHashes: recent, recentFeaturedThreshold: 2);
+
+        // Nothing qualifies, so fall back to the plain highest-scoring pick rather than failing.
+        Assert.Equal("a.jpg", picks.Single(p => p.IsFeatured).Path);
+    }
+
+    [Fact]
+    public void Select_NoRecentFeatured_FeaturedIsBest()
+    {
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.9 }, hash: 0x0),
+            Img("c.jpg", new[] { 0.7 }, hash: 0xFFFFFFFFFFFFFFFF),
+        };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup,
+            recentFeaturedHashes: new HashSet<ulong>(), recentFeaturedThreshold: 2);
+
+        Assert.Equal("a.jpg", picks.Single(p => p.IsFeatured).Path);
+    }
+
+    [Fact]
     public void Select_SkipsPerceptualNearDuplicate()
     {
         var scored = new[]
@@ -344,6 +398,31 @@ public class PerceptualHashTests : IDisposable
         string b = SaveGradient("b.png", x => (byte)(x * 17));
 
         Assert.Equal(0, PerceptualHash.HammingDistance(PerceptualHash.Compute(a), PerceptualHash.Compute(b)));
+    }
+
+    [Fact]
+    public void Compute_Stream_MatchesPathOverload()
+    {
+        string path = SaveGradient("s.png", x => (byte)(x * 23));
+
+        using FileStream fs = File.OpenRead(path);
+        Assert.Equal(PerceptualHash.Compute(path), PerceptualHash.Compute(fs));
+    }
+
+    [Theory]
+    [InlineData(0b0001UL, 1, true)]   // distance 1 from 0x0, within threshold 1
+    [InlineData(0b0011UL, 1, false)]  // distance 2 from 0x0, outside threshold 1
+    [InlineData(0b0011UL, 2, true)]   // distance 2, within threshold 2
+    public void IsWithinAny_RespectsThreshold(ulong candidate, int threshold, bool expected)
+    {
+        var others = new[] { 0x0UL, 0xFF00UL };
+        Assert.Equal(expected, PerceptualHash.IsWithinAny(candidate, others, threshold));
+    }
+
+    [Fact]
+    public void IsWithinAny_EmptySet_IsFalse()
+    {
+        Assert.False(PerceptualHash.IsWithinAny(0x0, Array.Empty<ulong>(), 64));
     }
 
     private string SaveGradient(string name, Func<int, byte> brightness, int w = 9, int h = 8)

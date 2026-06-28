@@ -176,10 +176,49 @@ public static class BlogPostParser
                     // drop it and let the following char be processed normally on the next iteration.
                     break;
                 case '"':
-                    if (IsStringEnd(json, i, stringIsValue))
+                    // A key string always terminates at its first quote (model keys are fixed field
+                    // names, never containing literal quotes); a value string ends only before ,}].
+                    // Treating the key quote as the terminator is what lets the missing-colon repair
+                    // below fire even though no ':' follows.
+                    if (stringIsValue ? IsStringEnd(json, i, true) : true)
                     {
                         sb.Append('"');
                         inString = false;
+
+                        // An object key must be followed by ':'. Some models drop it (and the value's
+                        // opening quote too), e.g. "bodyHtml"<p>…</p>" instead of "bodyHtml": "<p>…</p>".
+                        // Repair the missing colon — and, when the value is bare, synthesise its opening
+                        // quote and resume in value-string mode so the rest is escaped/terminated normally.
+                        if (!stringIsValue)
+                        {
+                            int k = i + 1;
+                            while (k < json.Length && char.IsWhiteSpace(json[k])) k++;
+                            if (k < json.Length && json[k] != ':')
+                            {
+                                char vc = json[k];
+                                if (vc is '"' or '{' or '[' or '-' or 't' or 'f' or 'n' || char.IsDigit(vc))
+                                {
+                                    // Value is present and well-formed — only the colon was missing.
+                                    sb.Append(':');
+                                    lastStructural = ':';
+                                }
+                                else if (vc is '}' or ']' or ',')
+                                {
+                                    // Key with no value at all — substitute null so the object stays valid.
+                                    sb.Append(": null");
+                                    lastStructural = 'l';
+                                }
+                                else
+                                {
+                                    // Bare (unquoted) value, typically HTML beginning with '<' — open a
+                                    // value string and resume scanning from the first value char.
+                                    sb.Append(": \"");
+                                    inString = true;
+                                    stringIsValue = true;
+                                    i = k - 1;
+                                }
+                            }
+                        }
                     }
                     else
                     {

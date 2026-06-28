@@ -25,6 +25,21 @@ public static class PerceptualHash
         return Compute(image);
     }
 
+    /// <summary>
+    /// Computes the dHash of image bytes read from <paramref name="stream"/> — used for images fetched
+    /// over HTTP (e.g. recent posts' featured images) that never touch the local disk.
+    /// </summary>
+    public static ulong Compute(Stream stream)
+    {
+        using var image = Image.Load<L8>(stream);
+        image.Mutate(x => x.Resize(Width, Height));
+        return Compute(image);
+    }
+
+    /// <summary>True when <paramref name="hash"/> is within <paramref name="threshold"/> bits of any hash in <paramref name="others"/>.</summary>
+    public static bool IsWithinAny(ulong hash, IEnumerable<ulong> others, int threshold)
+        => others.Any(o => HammingDistance(hash, o) <= threshold);
+
     /// <summary>Computes the dHash of an already-loaded 9x8 8-bit grayscale image.</summary>
     internal static ulong Compute(Image<L8> image)
     {

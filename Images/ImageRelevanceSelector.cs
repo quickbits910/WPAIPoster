@@ -44,7 +44,9 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         int count,
         int hammingThreshold = AppLimits.DefaultImageDedupThreshold,
         double minRelevance = AppLimits.DefaultMinImageRelevance,
-        Action<int, int, string, double, string?>? onScored = null)
+        Action<int, int, string, double, string?>? onScored = null,
+        IReadOnlySet<ulong>? recentFeaturedHashes = null,
+        int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold)
     {
         // With no themes, fall back to a single combined pseudo-theme (legacy single-score behaviour).
         IReadOnlyList<ImageTheme> themes = imageThemes.Count > 0
@@ -92,7 +94,8 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             onScored?.Invoke(i + 1, total, Path.GetFileName(path), best, bestTheme);
         }
 
-        return Select(scored, subjects, count, hammingThreshold, minRelevance);
+        return Select(scored, subjects, count, hammingThreshold, minRelevance,
+            recentFeaturedHashes, recentFeaturedThreshold);
     }
 
     /// <summary>
@@ -119,10 +122,19 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
     /// <paramref name="minRelevance"/> are ever selected — an irrelevant image is never used to pad a
     /// theme, so fewer than <paramref name="count"/> images may be returned. Dedup is best-effort:
     /// it is relaxed (but the relevance floor is not) before the result is allowed to shrink.
+    /// <para>
+    /// When <paramref name="recentFeaturedHashes"/> is supplied, the <em>featured</em> pick is steered
+    /// away from any chosen image within <paramref name="recentFeaturedThreshold"/> bits of a recent
+    /// post's featured image, so consecutive posts don't reuse the same hero image. This only influences
+    /// which chosen image is featured — colliding images may still be attached inline — and falls back
+    /// to the highest-scoring pick if every chosen image collides.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<SelectedImage> Select(
         IReadOnlyList<ScoredImage> scored, IReadOnlyList<string> themes, int count, int hammingThreshold,
-        double minRelevance = 0.0)
+        double minRelevance = 0.0,
+        IReadOnlySet<ulong>? recentFeaturedHashes = null,
+        int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold)
     {
         count = Math.Max(0, count);
         if (count == 0 || scored.Count == 0)
@@ -206,11 +218,19 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         if (chosen.Count == 0)
             return Array.Empty<SelectedImage>();
 
-        // 5) Featured = highest single score among the chosen images.
-        int featured = chosen
+        // 5) Featured = highest-scoring chosen image, but steered away from any image matching a recent
+        //    post's featured image (by perceptual hash). If every chosen image collides — or no history
+        //    was supplied — fall back to the plain highest-scoring pick.
+        var byScore = chosen
             .OrderByDescending(c => MaxScore(c.Img))
             .ThenBy(c => scored[c.Img].Path, StringComparer.Ordinal)
-            .First().Img;
+            .ToList();
+
+        int featured = (recentFeaturedHashes is { Count: > 0 }
+            ? byScore.FirstOrDefault(
+                c => !PerceptualHash.IsWithinAny(scored[c.Img].Hash, recentFeaturedHashes, recentFeaturedThreshold),
+                byScore[0])
+            : byScore[0]).Img;
 
         string? ThemeName(int idx) => idx >= 0 && idx < themes.Count ? themes[idx] : null;
 

@@ -215,6 +215,42 @@ public class BlogPostParserTests
     }
 
     [Fact]
+    public void Parse_RepairsMissingColonAndOpeningQuoteAfterKey()
+    {
+        // Observed in a real run: the model dropped ': "' after a key, writing
+        //   "bodyHtml"<p>…</p>"   instead of   "bodyHtml": "<p>…</p>"
+        // The value's closing quote is present; only the colon + opening quote are missing.
+        const string raw = """{ "h1": "H", "bodyHtml"<p>Most agents are static.</p>" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("<p>Most agents are static.</p>", post.BodyHtml);
+    }
+
+    [Fact]
+    public void Parse_RepairsMissingColon_WithUnescapedBlockAttributeInBareValue()
+    {
+        // The hard case from the log: missing ': "' AND an unescaped {"ordered":true} inside the
+        // (now bare) HTML value. Both repairs must compose.
+        const string raw =
+            """{ "h1": "H", "bodyHtml"<!-- wp:list {"ordered":true} --><ol><li>one</li></ol><!-- /wp:list -->" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Contains("<!-- wp:list {\"ordered\":true} -->", post.BodyHtml);
+        Assert.Contains("<!-- /wp:list -->", post.BodyHtml);
+    }
+
+    [Fact]
+    public void Parse_RepairsMissingColon_WhenValueIsQuoted()
+    {
+        // Colon dropped but the value still has its opening quote: "h1""Title" → "h1": "Title".
+        const string raw = """{ "h1""My Title", "bodyHtml": "<p>B</p>" }""";
+        var post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("My Title", post.H1);
+        Assert.Equal("<p>B</p>", post.BodyHtml);
+    }
+
+    [Fact]
     public void Parse_DropsStrayGarbageArrayElement()
     {
         // A weak model leaked a bare "<em>," token where an array element should be. It isn't inside

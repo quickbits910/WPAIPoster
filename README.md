@@ -25,7 +25,9 @@ ask to publish.
    model). It then **vision-scores** each shortlisted image against *every* theme in one call — using the
    post's title/summary as context — and assigns the best **distinct** image to each theme, skipping
    near-identical duplicates (perceptual hash) and anything below a relevance floor, then resizes the
-   winners under 500 KB.
+   winners under 500 KB. It also fetches the **featured images of recent posts** and steers the new
+   post's featured image away from any that match (by perceptual hash), so consecutive posts don't reuse
+   the same hero image.
 6. It connects to your WordPress server over SSH (with host-key verification), uploads everything, and
    creates the post via WP-CLI — draft by default — placing the best image under the H1, the next two under
    the 2nd and 3rd H2s, and a fourth at the bottom, and applying the tags and categories.
@@ -61,6 +63,9 @@ ask to publish.
   "tagCandidateLimit": 40,
   "imageDedupThreshold": 6,
   "minImageRelevance": 0.0,
+  "avoidRecentFeaturedImages": true,
+  "recentFeaturedHistoryCount": 10,
+  "recentFeaturedHammingThreshold": 4,
   "defaultCategory": "Blog",
   "enableEditorReviewer": false,
   "editorReviewerThreshold": 0.8,
@@ -89,6 +94,9 @@ ask to publish.
 | `tagCandidateLimit` | Cap on the tag-matched shortlist sent to the model for image pre-selection. |
 | `imageDedupThreshold` | Max perceptual-hash Hamming distance at which two selected images count as near-duplicates (default `6`; higher = more aggressive dedup). |
 | `minImageRelevance` | Minimum vision score (`0.00`–`1.00`) an image must exceed to be attached; images at/below are never used to pad a theme (default `0.0`, drops only zero-scoring images). |
+| `avoidRecentFeaturedImages` | `true` (default) → steer the featured image away from the featured images of recent posts so consecutive posts don't reuse the same hero image. `false` disables the check (and skips the lookup). |
+| `recentFeaturedHistoryCount` | How many recent published posts' featured images to avoid (default `10`). |
+| `recentFeaturedHammingThreshold` | Max perceptual-hash Hamming distance at which a candidate counts as the *same* image as a recent featured one (default `4` — tighter than `imageDedupThreshold`; this means "the same hero image", not merely similar). |
 | `defaultCategory` | Category applied when the model returns none (default `Blog`). |
 | `enableEditorReviewer` | `true` → an Editor LLM scores the draft and drives rewrites; `false` (default) skips review. |
 | `editorReviewerThreshold` | Minimum Editor score (`0.00`–`1.00`) a draft must reach to be accepted without a rewrite (default `0.80`). |
@@ -193,6 +201,10 @@ terminal and `--quiet` trims it. The log path is printed at the end of every run
 The app runs standard WP-CLI commands in your `wordPressFolder`:
 
 - `wp post list` — to gather existing posts for internal-link suggestions.
+- `wp post list --field=ID --orderby=date --order=DESC` → `wp post meta get <id> _thumbnail_id` →
+  `wp post get <attId> --field=guid` — to find recent posts' featured images so the new post avoids
+  reusing them (see *featured-image variety* below). The images are downloaded over HTTP and perceptually
+  hashed; this whole step is best-effort and skipped entirely when `avoidRecentFeaturedImages` is `false`.
 - `wp post create <file> --post_status=draft|publish --post_excerpt=… --porcelain` — the post body is
   uploaded as a file (via SFTP) and passed to WP-CLI, so HTML is never mangled by shell escaping.
 - `wp post meta update …` — writes the SEO meta title/description (if `seoMetaKeys` is set).
@@ -218,6 +230,12 @@ server (see `WPAIPoster.Tests/`). For deeper architectural notes, see [`CLAUDE.m
 ## Notes & limitations
 
 - Video upload isn't implemented yet (images only).
+- **Featured-image variety:** because `wp media import` re-uploads each image under a fresh GUID, there's
+  no stored link between a local file and its WordPress media item. The new post's featured image is
+  instead matched against recent posts' featured images by **perceptual hash** (content fingerprint),
+  which survives WordPress's rename/re-encode. It only influences which image is *featured* — a recently
+  used image can still appear inline — and it falls back to the best-scoring image if every candidate
+  collides. Recent featured images must be reachable over HTTP from where you run the tool.
 - The post structure (meta title/description, H1, H2/H3 flow, CTA, internal links, image themes, tags,
   categories) is produced as structured JSON by the model and assembled deterministically by the app.
 - SSH uses host-key verification (pin or trust-on-first-use); the first connection to a new server pins

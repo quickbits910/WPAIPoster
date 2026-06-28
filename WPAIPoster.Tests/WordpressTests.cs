@@ -1,3 +1,5 @@
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
 using WPAIPoster.Images;
@@ -91,6 +93,24 @@ public class WpCliCommandsTests
     {
         string cmd = WpCliCommands.SetPostTerms(7, "post_tag", new[] { 12, 34 });
         Assert.Equal("wp post term set 7 post_tag 12 34 --by=id", cmd);
+    }
+
+    [Fact]
+    public void ListRecentPublishedPostIds_OrdersByDateDescAndLimits()
+    {
+        string cmd = WpCliCommands.ListRecentPublishedPostIds(10);
+        Assert.Contains("wp post list --post_status=publish", cmd);
+        Assert.Contains("--field=ID", cmd);
+        Assert.Contains("--format=json", cmd);
+        Assert.Contains("--orderby=date", cmd);
+        Assert.Contains("--order=DESC", cmd);
+        Assert.Contains("--posts_per_page=10", cmd);
+    }
+
+    [Fact]
+    public void GetPostMeta_QuotesKey()
+    {
+        Assert.Equal("wp post meta get 42 '_thumbnail_id'", WpCliCommands.GetPostMeta(42, "_thumbnail_id"));
     }
 }
 
@@ -401,5 +421,116 @@ public class WpCliPublisherTests
         publisher.Publish(SamplePost(), Array.Empty<SelectedImage>(), publish: false); // SamplePost has no tags
 
         Assert.DoesNotContain(runner.Commands, c => c.Contains("wp post term set") && c.Contains("post_tag"));
+    }
+}
+
+public class FeaturedHistoryFetcherTests
+{
+    [Fact]
+    public void ParsePostIds_NumericArray()
+    {
+        Assert.Equal(new[] { 101, 102, 103 }, FeaturedHistoryFetcher.ParsePostIds("[101, 102, 103]"));
+    }
+
+    [Fact]
+    public void ParsePostIds_StringArray()
+    {
+        Assert.Equal(new[] { 5, 6 }, FeaturedHistoryFetcher.ParsePostIds("""["5","6"]"""));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("{}")]
+    public void ParsePostIds_MalformedOrEmpty_ReturnsEmpty(string json)
+    {
+        Assert.Empty(FeaturedHistoryFetcher.ParsePostIds(json));
+    }
+
+    [Fact]
+    public void FetchRecentFeaturedHashes_ResolvesFeaturedImagesAndSkipsPostsWithoutThumbnail()
+    {
+        byte[] imgA = PngBytes(x => (byte)(x * 17));
+        byte[] imgC = PngBytes(x => (byte)((8 - x) * 30));
+        ulong hashA = PerceptualHash.Compute(new MemoryStream(imgA));
+        ulong hashC = PerceptualHash.Compute(new MemoryStream(imgC));
+
+        var runner = new FakeSshRunner(cmd =>
+        {
+            if (cmd.Contains("wp post list") && cmd.Contains("--field=ID"))
+                return Ok("[101, 102, 103]");
+            if (cmd.Contains("wp post meta get 101 '_thumbnail_id'")) return Ok("501");
+            if (cmd.Contains("wp post meta get 102 '_thumbnail_id'")) return Ok("");      // no featured image
+            if (cmd.Contains("wp post meta get 103 '_thumbnail_id'")) return Ok("503");
+            if (cmd.Contains("wp post get 501 --field=guid")) return Ok("http://site/a.jpg");
+            if (cmd.Contains("wp post get 503 --field=guid")) return Ok("http://site/c.jpg");
+            return Ok("");
+        });
+
+        Stream? Download(string url) => url switch
+        {
+            "http://site/a.jpg" => new MemoryStream(imgA),
+            "http://site/c.jpg" => new MemoryStream(imgC),
+            _ => null,
+        };
+
+        var fetcher = new FeaturedHistoryFetcher(runner, "site.au", Download);
+        var hashes = fetcher.FetchRecentFeaturedHashes(10);
+
+        Assert.Equal(2, hashes.Count);                 // post 102 (no thumbnail) skipped
+        Assert.Contains(hashA, hashes);
+        Assert.Contains(hashC, hashes);
+    }
+
+    [Fact]
+    public void FetchRecentFeaturedHashes_SkipsFailedDownloads()
+    {
+        byte[] imgA = PngBytes(x => (byte)(x * 17));
+
+        var runner = new FakeSshRunner(cmd =>
+        {
+            if (cmd.Contains("wp post list") && cmd.Contains("--field=ID")) return Ok("[1, 2]");
+            if (cmd.Contains("wp post meta get 1 '_thumbnail_id'")) return Ok("11");
+            if (cmd.Contains("wp post meta get 2 '_thumbnail_id'")) return Ok("22");
+            if (cmd.Contains("wp post get 11 --field=guid")) return Ok("http://site/a.jpg");
+            if (cmd.Contains("wp post get 22 --field=guid")) return Ok("http://site/missing.jpg");
+            return Ok("");
+        });
+
+        // The second image fails to download (returns null) and must be skipped, not throw.
+        Stream? Download(string url) => url == "http://site/a.jpg" ? new MemoryStream(imgA) : null;
+
+        var hashes = new FeaturedHistoryFetcher(runner, "site.au", Download).FetchRecentFeaturedHashes(10);
+
+        Assert.Single(hashes);
+    }
+
+    [Fact]
+    public void FetchRecentFeaturedHashes_ZeroCount_ReturnsEmptyWithoutQuerying()
+    {
+        var runner = new FakeSshRunner(_ => Ok("[1,2,3]"));
+        var hashes = new FeaturedHistoryFetcher(runner, "site.au", _ => null).FetchRecentFeaturedHashes(0);
+
+        Assert.Empty(hashes);
+        Assert.Empty(runner.Commands);
+    }
+
+    private static SshCommandResult Ok(string stdout) => new(0, stdout, "");
+
+    private static byte[] PngBytes(Func<int, byte> brightness, int w = 9, int h = 8)
+    {
+        using var img = new Image<L8>(w, h);
+        img.ProcessPixelRows(accessor =>
+        {
+            for (int y = 0; y < h; y++)
+            {
+                Span<L8> row = accessor.GetRowSpan(y);
+                for (int x = 0; x < w; x++)
+                    row[x] = new L8(brightness(x));
+            }
+        });
+        using var ms = new MemoryStream();
+        img.SaveAsPng(ms);
+        return ms.ToArray();
     }
 }

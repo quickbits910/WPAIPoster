@@ -90,6 +90,25 @@ public sealed class AppSettings
     [JsonPropertyName("minImageRelevance")]
     public double? MinImageRelevance { get; set; }
 
+    /// <summary>
+    /// When true (default), the featured image is steered away from images matching the featured image
+    /// of recent published posts (compared by perceptual hash, fetched from WordPress), so consecutive
+    /// posts don't reuse the same hero image. Null uses the default (true).
+    /// </summary>
+    [JsonPropertyName("avoidRecentFeaturedImages")]
+    public bool? AvoidRecentFeaturedImages { get; set; }
+
+    /// <summary>How many recent published posts' featured images to avoid. Null uses the default (10).</summary>
+    [JsonPropertyName("recentFeaturedHistoryCount")]
+    public int? RecentFeaturedHistoryCount { get; set; }
+
+    /// <summary>
+    /// Max perceptual-hash Hamming distance at which a candidate counts as the SAME image as a recent
+    /// featured one (and is therefore not re-featured). Null uses the default (4).
+    /// </summary>
+    [JsonPropertyName("recentFeaturedHammingThreshold")]
+    public int? RecentFeaturedHammingThreshold { get; set; }
+
     /// <summary>Category applied when the model returns none. Null uses the default ("Blog").</summary>
     [JsonPropertyName("defaultCategory")]
     public string? DefaultCategory { get; set; }

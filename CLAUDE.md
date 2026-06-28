@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (205 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (236 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -44,7 +44,7 @@ BlogPost/    BlogPostGenerator, BlogPostResult (+ ImageTheme/ImageThemeListConve
 Images/      ImageLibraryScanner, ImageRelevanceSelector, ImagePreparer, PerceptualHash,
              TagBasedImageSelector, TagMatcher, CandidateSet, ImageTagReader
 Wordpress/   ISshRunner, SshNetRunner, WpCliCommands, WpCliPublisher,
-             ExistingPostsFetcher, HtmlImageEmbedder
+             ExistingPostsFetcher, FeaturedHistoryFetcher, HtmlImageEmbedder
 WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 ```
 
@@ -60,7 +60,9 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
    `CandidateSet.Build` → `ImageRelevanceSelector` (one vision call per image scores it against **every**
    theme description, with post title/summary as context) → diversity assignment (`Select`: best distinct
    image per theme, `PerceptualHash` dedup, `minImageRelevance` floor) → `ImagePreparer` recompresses the
-   chosen images under the 500 KB cap.
+   chosen images under the 500 KB cap. Before scoring, when `avoidRecentFeaturedImages`,
+   `FeaturedHistoryFetcher` fetches recent posts' featured images and passes their dHashes to `Select`,
+   which steers the **featured** pick away from any match (see *featured-image variety* below).
 6. `WpCliPublisher` publishes: SFTP body → `wp post create` → SEO meta → `wp media import`
    (featured + inline) → embed image URLs → `wp post update` → clean up remote temp files.
 
@@ -74,6 +76,11 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   also **repairs** common LLM-JSON breakage via `RepairJson` (a two-pass parse): unescaped `"` inside
   string values, raw newlines/control chars (e.g. the literal newlines a model emits inside a `<pre>`/
   `<code>` block), and bogus backslash escapes like `\'` (dropped, since they aren't valid JSON escapes).
+  It also repairs a **missing colon after an object key** — observed in the wild as `"bodyHtml"<p>…</p>"`
+  (the model dropped the `: "`): a key string always terminates at its first quote, and if it isn't
+  followed by `:` the colon is synthesised — plus the value's opening quote when the value is bare (e.g.
+  HTML starting with `<`), resuming in value-string mode so the rest is escaped/terminated normally; a
+  key with no value at all (`"k"}`/`,`) becomes `: null`.
   It also **strips bare non-JSON garbage** the model leaks into a *structural* position — a stray
   `<em>,` array element, an HTML tag where a value belongs — since that junk lives outside any string and
   so can't be string-repaired; left alone, one bad element would sink the whole envelope even though the
@@ -101,6 +108,18 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   Hamming `imageDedupThreshold`), and never selects an image scoring at/below `minImageRelevance` (so it
   returns *fewer* images rather than padding with irrelevant ones). The post title/meta description are
   passed in as scoring context.
+- **Featured-image variety**: `wp media import` re-uploads each image under a fresh GUID, so there is **no
+  stored link** between a local file and its WordPress media item. To stop consecutive posts reusing the
+  same hero image, `FeaturedHistoryFetcher` (`Wordpress/`) recovers identity by **content**: `wp post list`
+  (recent, date-desc) → `_thumbnail_id` meta → attachment `guid` (URL) → HTTP download → `PerceptualHash.Compute`.
+  The resulting dHash set is passed into `ImageRelevanceSelector.Select`, whose **step 5** picks the
+  highest-scoring chosen image *not* within `recentFeaturedHammingThreshold` of any recent featured hash —
+  influencing only which image is **featured** (collisions can still appear inline), with a graceful
+  fallback to the best pick if all collide. Every step is best-effort (skips posts without a featured
+  image, failed lookups, undecodable downloads) and the whole lookup is skipped when
+  `avoidRecentFeaturedImages` is false. The HTTP download is injected as a `Func<string, Stream?>` so the
+  orchestration is unit-testable offline; `ParsePostIds` is a pure helper. The publish path is **unchanged**
+  — this reads existing posts, so it works retroactively with no re-publishing.
 - **Editor reviewer**: `EditorReviewer` (prompt `editor-reviewer-prompt.json`) returns
   `{ score, feedback }`; `ParseReview` reuses `BlogPostParser`'s extract/repair and returns an *unscored*
   (`NaN`) review on unparseable replies so it fails safe (never blocks publishing). Gated by
@@ -133,9 +152,11 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   (`0600` on Unix). Never commit `ssh-config.key`, `id_rsa`, `*.pem`, `*.key` — they are gitignored.
   Set secrets via the `--set-key-password` / `--set-ssh-password` verbs, not by hand.
 - **Testability**: `ISshRunner` and `ILlmClient` are interfaces with fakes in `Tests/Fakes.cs`.
-  `WpCliPublisher`, `ImageRelevanceSelector`, `EditorReviewer`, `BlogPostParser`, and `PerceptualHash`
-  expose pure helpers (`Select`, `ParseScore`/`ParseScores`, `BuildPrompt`, `RepairJson`, `ParseReview`,
-  `Compute`/`HammingDistance`, command builders) so logic can be tested without a server or model.
+  `WpCliPublisher`, `ImageRelevanceSelector`, `EditorReviewer`, `BlogPostParser`, `PerceptualHash`, and
+  `FeaturedHistoryFetcher` expose pure helpers (`Select`, `ParseScore`/`ParseScores`, `BuildPrompt`,
+  `RepairJson`, `ParseReview`, `Compute`/`HammingDistance`/`IsWithinAny`, `ParsePostIds`, command builders)
+  so logic can be tested without a server or model. `FeaturedHistoryFetcher` takes the image download as a
+  `Func<string, Stream?>` so its orchestration is exercised with a fake runner + canned image bytes.
 - **Nested test project gotcha**: because `WPAIPoster.Tests/` is inside the main project dir, the main
   `.csproj` explicitly `<Compile Remove="WPAIPoster.Tests/**/*.cs" />` (plus Content/None/EmbeddedResource).
   If you add file globs to the main project, preserve those removes or the test sources get double-compiled.
@@ -150,7 +171,8 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 
 - `app.settings.json` — `provider`, `model`, `visionModel`, `baseUrl`, `apiKey`, `imageLibrary`,
   `autoPublish`, `wordPressFolder`, `maxImagesToScore`, `imagesPerPost`, `maxImagesToIndex`, `tagPrefix`,
-  `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `defaultCategory`,
+  `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `avoidRecentFeaturedImages`,
+  `recentFeaturedHistoryCount`, `recentFeaturedHammingThreshold`, `defaultCategory`,
   `enableEditorReviewer`, `editorReviewerThreshold`, `outputFolder`, `seoMetaKeys`. Nullable (each falls
   back to the matching `AppLimits` default); API key also falls back to `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
 - `ssh-config.json` — `server`, `port`, `username`, `keyPath`, `privateKeyPwdEnc`, `passwordEnc`,

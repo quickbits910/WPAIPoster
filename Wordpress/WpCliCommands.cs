@@ -22,6 +22,15 @@ public static class WpCliCommands
     public static string ListPublishedPosts(int limit = 200)
         => $"wp post list --post_status=publish --fields=ID,post_title,url --format=json --posts_per_page={limit}";
 
+    /// <summary>Lists the IDs of the most recently published posts (newest first) as a JSON array.</summary>
+    public static string ListRecentPublishedPostIds(int limit)
+        => $"wp post list --post_status=publish --field=ID --format=json "
+         + $"--orderby=date --order=DESC --posts_per_page={limit}";
+
+    /// <summary>Reads a single post meta value (e.g. <c>_thumbnail_id</c> for the featured attachment).</summary>
+    public static string GetPostMeta(int postId, string key)
+        => $"wp post meta get {postId} {ShellQuote(key)}";
+
     /// <summary>
     /// Creates a post from a remote content file. Returns the new ID via <c>--porcelain</c>.
     /// <paramref name="publish"/> false ⇒ draft (the default).
