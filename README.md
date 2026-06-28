@@ -20,9 +20,12 @@ ask to publish.
    scores below your quality threshold, the post is **rewritten** with the editor's feedback (clarity of
    audience, why-it-matters, the main takeaway, flow and style) — up to two rounds. Off by default.
 5. It indexes the keyword tags on your local **image library** (XMP / xattr / IPTC, as written by
-   [ImageTagger](https://github.com/quickbits910)) and shortlists images whose tags match the post. Each
-   image theme carries a short **subject** (for tag matching) and a richer **description** (for the vision
-   model). It then **vision-scores** each shortlisted image against *every* theme in one call — using the
+   [ImageTagger](https://github.com/quickbits910)) and shortlists images whose tags match the post. The
+   shortlist is **weighted** across signals — your own `[TAGS:]` (see below) rank highest, then the post's
+   **tags**, then **image-theme subjects**, then **categories**, with the H1/body text as a low-priority
+   background — so the most on-topic images surface first. Each image theme carries a short **subject** (for
+   tag matching) and a richer **description** (for the vision model). It then **vision-scores** each
+   shortlisted image against *every* theme in one call — using the
    post's title/summary as context — and assigns the best **distinct** image to each theme, skipping
    near-identical duplicates (perceptual hash) and anything below a relevance floor, then resizes the
    winners under 500 KB. It also fetches the **featured images of recent posts** and steers the new
@@ -168,6 +171,20 @@ dotnet run --project WPAIPoster.csproj -- --no-images "Text-only announcement po
 
 If you don't pass a brief on the command line, the app prompts you for one. You can paste multiple
 lines (the whole brief, tables, code, etc.) and finish input with **Ctrl-D** on an empty line.
+
+#### Steering image selection with `[TAGS: …]`
+
+Add a `[TAGS: …]` directive anywhere in your brief to hand the image picker your own keywords. These get
+the **highest** weight when shortlisting images (above the post's auto-generated tags, themes, and
+categories), so it's the quickest way to nudge image choice when the generated themes drift off-topic:
+
+```text
+A write-up of our 100-agent experiment optimising Gemma 4 in vLLM. [TAGS: Agent, Workflow, MCP]
+```
+
+The directive is **stripped from the brief** before the post is written, so it only influences image
+selection — it never appears in the published content. Tags are comma-separated, trimmed, and
+case-insensitively deduped.
 
 ### Options
 

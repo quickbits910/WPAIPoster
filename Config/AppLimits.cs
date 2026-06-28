@@ -26,6 +26,25 @@ public static class AppLimits
     /// <summary>Default cap on the tag-matched shortlist sent to the tag-selection model.</summary>
     public const int DefaultTagCandidateLimit = 40;
 
+    // Per-source weights used when ranking library images for the vision-scoring candidate set
+    // (see TagMatcher.Rank / TagBasedImageSelector). Priority: author-supplied tags > post tags >
+    // image themes > categories > the post's H1/body text (lowest, background signal only).
+
+    /// <summary>Weight of author-supplied tags (the brief's <c>[TAGS: …]</c> directive) in image ranking.</summary>
+    public const int TagWeightUserProvided = 5;
+
+    /// <summary>Weight of the post's tags in image ranking.</summary>
+    public const int TagWeightTags = 4;
+
+    /// <summary>Weight of the image-theme subjects in image ranking.</summary>
+    public const int TagWeightThemes = 3;
+
+    /// <summary>Weight of the post's categories in image ranking.</summary>
+    public const int TagWeightCategories = 2;
+
+    /// <summary>Weight of the post's H1 + body text in image ranking (lowest — background signal).</summary>
+    public const int TagWeightBodyBackground = 1;
+
     /// <summary>
     /// Default max Hamming distance (over the 64-bit perceptual dHash) at which two images are treated
     /// as near-identical and not both selected. ~0-6 ≈ visually the same image.

@@ -102,6 +102,18 @@ public class TagBasedImageSelectorTests
     }
 
     [Fact]
+    public async Task SelectAsync_UserTags_PromoteOtherwiseExcludedImage()
+    {
+        // Without author tags "laptop" matches nothing in the post → /c.jpg is excluded.
+        // Supplying it as a (highest-weight) author tag pulls /c.jpg to the top of the shortlist.
+        var fake = new FakeLlmClient("I cannot decide"); // fall back to local ranking
+        var picked = await new TagBasedImageSelector(fake, "{TAGGED_IMAGES}")
+            .SelectAsync(MountainCatalog(), MountainPost(), candidateLimit: 10, userTags: new[] { "laptop" });
+
+        Assert.Equal(new[] { "/c.jpg", "/a.jpg", "/b.jpg" }, picked);
+    }
+
+    [Fact]
     public async Task SelectAsync_NoTagMatches_ReturnsEmpty_WithoutCallingModel()
     {
         var fake = new FakeLlmClient("[1]");

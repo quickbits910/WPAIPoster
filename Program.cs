@@ -73,6 +73,10 @@ if (string.IsNullOrWhiteSpace(brief))
     return 1;
 }
 
+// Pull any author "[TAGS: …]" directive out of the brief: the tags steer image selection (highest
+// priority) and the directive is stripped so it never reaches the generator / published post.
+(IReadOnlyList<string> userTags, brief) = BriefTags.Parse(brief);
+
 if (string.IsNullOrWhiteSpace(settings.Model))
 {
     Console.Error.WriteLine("No 'model' configured in app.settings.json.");
@@ -131,6 +135,8 @@ try
     IReadOnlyList<string> briefLinks = BriefLinks.ExtractUrls(brief);
     if (briefLinks.Count > 0)
         ui.Info($"Found {briefLinks.Count} source link(s) in the brief to carry through");
+    if (userTags.Count > 0)
+        ui.Info($"Using {userTags.Count} author tag(s) for image selection: {string.Join(", ", userTags)}");
 
     var generator = BlogPostGenerator.Create(textClient);
     BlogPostResult post = await ui.StatusAsync("Generating blog post",
@@ -202,7 +208,7 @@ try
         ui.Success($"Indexed {catalog.Images.Count} image(s) ({catalog.TaggedCount} tagged)");
 
         IReadOnlyList<string> tagPicked = await ui.StatusAsync("Tag matching against the post",
-            () => TagBasedImageSelector.Create(textClient).SelectAsync(catalog, post, tagCandidateLimit));
+            () => TagBasedImageSelector.Create(textClient).SelectAsync(catalog, post, tagCandidateLimit, userTags));
         ui.Success($"Tag matching selected {tagPicked.Count} image(s)");
 
         // 3b. Top up with the newest images, then vision-score the candidate set against the themes.

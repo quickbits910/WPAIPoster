@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (236 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (250 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -56,7 +56,8 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 4. *(Optional, when `enableEditorReviewer`)* `EditorReviewer` scores the draft; if below
    `editorReviewerThreshold`, `BlogPostGenerator.GenerateAsync` re-runs with the editor feedback appended
    (capped at `AppLimits.MaxEditorRevisions` rewrites). A flaky/unparseable review never blocks publishing.
-5. `ImageLibraryScanner.ScanWithTags` → `TagBasedImageSelector` (cheap tag pre-filter by **subject**) →
+5. `ImageLibraryScanner.ScanWithTags` → `TagBasedImageSelector` (cheap **weighted** tag pre-filter:
+   author `[TAGS:]` > post tags > theme subjects > categories > H1/body — see *weighted image ranking*) →
    `CandidateSet.Build` → `ImageRelevanceSelector` (one vision call per image scores it against **every**
    theme description, with post title/summary as context) → diversity assignment (`Select`: best distinct
    image per theme, `PerceptualHash` dedup, `minImageRelevance` floor) → `ImagePreparer` recompresses the
@@ -124,6 +125,17 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   `{ score, feedback }`; `ParseReview` reuses `BlogPostParser`'s extract/repair and returns an *unscored*
   (`NaN`) review on unparseable replies so it fails safe (never blocks publishing). Gated by
   `enableEditorReviewer` / `editorReviewerThreshold`; the rewrite loop lives in `Program.cs`.
+- **Weighted image ranking**: `TagMatcher.Rank(catalog, WeightedTokens[], limit)` scores each library
+  image by the **sum over its tags of the highest matching source weight**, so high-priority signals
+  dominate the candidate set sent to vision-scoring. `TagBasedImageSelector` builds the groups from the
+  `BlogPostResult` in priority order — author tags > `post.Tags` > theme subjects > `post.Categories` >
+  H1/body background — using the `AppLimits.TagWeight*` constants. The old unweighted `Rank`/`Tokenize`
+  overloads are kept for back-compat. `WordsMatch`/`TagWords` (flexible substring/plural/stem matching)
+  are shared by both.
+- **Author `[TAGS:]` directive**: the brief may include `[TAGS: Agent, Workflow, MCP]`. `BriefTags.Parse`
+  (pure) extracts these as the highest-priority "UserProvided" signal for image selection and **strips**
+  the directive from the brief so it never reaches the generator or the published post. Parsed in
+  `Program.cs` right after the brief is resolved.
 - **Multi-line brief input**: the interactive `Prompt` in `Program.cs` reads stdin until **EOF (Ctrl-D)**,
   not a single line, so pasted multi-line briefs (tables, code) are captured whole.
 - **Terminal UI + logging** (`Ui/`): all pipeline output goes through the `Ui` facade (Spectre.Console —

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using WPAIPoster.BlogPost;
+using WPAIPoster.Config;
 using WPAIPoster.Llm;
 using WPAIPoster.Prompts;
 
@@ -18,16 +19,24 @@ public sealed class TagBasedImageSelector(ILlmClient client, string promptTempla
         => new(client, PromptLoader.Load(PromptLoader.TagToBodyPromptFile).GetPromptText());
 
     /// <summary>
-    /// Ranks the catalog by tag relevance to <paramref name="post"/>, asks the model to pick from the top
-    /// <paramref name="candidateLimit"/>, and returns the chosen paths. Falls back to the local ranking if
-    /// the model returns nothing parseable; returns empty if no image tags match the content at all.
+    /// Ranks the catalog by weighted tag relevance to <paramref name="post"/> (and any author-supplied
+    /// <paramref name="userTags"/>), asks the model to pick from the top <paramref name="candidateLimit"/>,
+    /// and returns the chosen paths. Falls back to the local ranking if the model returns nothing parseable;
+    /// returns empty if no image tags match the content at all. Sources are weighted highest-first:
+    /// author tags, post tags, image themes, categories, then the H1/body text as a background signal.
     /// </summary>
     public async Task<IReadOnlyList<string>> SelectAsync(
-        ImageTagCatalog catalog, BlogPostResult post, int candidateLimit)
+        ImageTagCatalog catalog, BlogPostResult post, int candidateLimit, IReadOnlyList<string>? userTags = null)
     {
-        IReadOnlyCollection<string> tokens =
-            TagMatcher.Tokenize(post.H1, post.BodyHtml, post.ImageThemes.Select(t => t.Subject));
-        IReadOnlyList<TaggedImage> candidates = TagMatcher.Rank(catalog, tokens, candidateLimit);
+        var groups = new List<TagMatcher.WeightedTokens>
+        {
+            new(TagMatcher.TokenizeWords(userTags), AppLimits.TagWeightUserProvided),
+            new(TagMatcher.TokenizeWords(post.Tags), AppLimits.TagWeightTags),
+            new(TagMatcher.TokenizeWords(post.ImageThemes.Select(t => t.Subject)), AppLimits.TagWeightThemes),
+            new(TagMatcher.TokenizeWords(post.Categories), AppLimits.TagWeightCategories),
+            new(TagMatcher.Tokenize(post.H1, post.BodyHtml, null), AppLimits.TagWeightBodyBackground),
+        };
+        IReadOnlyList<TaggedImage> candidates = TagMatcher.Rank(catalog, groups, candidateLimit);
         if (candidates.Count == 0)
             return Array.Empty<string>();
 

@@ -75,4 +75,69 @@ public class TagMatcherTests
         });
         Assert.Empty(TagMatcher.Rank(catalog, Array.Empty<string>(), 5));
     }
+
+    // ---- Weighted Rank ----
+
+    [Fact]
+    public void TokenizeWords_AppliesSameStopwordAndLengthFilter()
+    {
+        var tokens = TagMatcher.TokenizeWords(new[] { "Artificial Intelligence", "ai-agents", "an" });
+        Assert.Contains("artificial", tokens);
+        Assert.Contains("intelligence", tokens);
+        Assert.Contains("agents", tokens);   // split on '-'
+        Assert.DoesNotContain("ai", tokens);  // < 3 chars
+        Assert.DoesNotContain("an", tokens);   // stopword/short
+    }
+
+    [Fact]
+    public void WeightedRank_HigherWeightSourceOutranksLowerWeightSource()
+    {
+        var t = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var catalog = new ImageTagCatalog(new List<TaggedImage>
+        {
+            new("/user.jpg", new[] { "agent" }, t),     // matches the weight-5 group only
+            new("/cat.jpg", new[] { "software" }, t),   // matches the weight-2 group only
+        });
+
+        var groups = new[]
+        {
+            new TagMatcher.WeightedTokens(TagMatcher.TokenizeWords(new[] { "agent" }), 5),
+            new TagMatcher.WeightedTokens(TagMatcher.TokenizeWords(new[] { "software" }), 2),
+        };
+
+        var ranked = TagMatcher.Rank(catalog, groups, 5);
+        Assert.Equal(new[] { "/user.jpg", "/cat.jpg" }, ranked.Select(r => r.Path));
+    }
+
+    [Fact]
+    public void WeightedRank_SumsPerTagMaxWeight()
+    {
+        var t = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var catalog = new ImageTagCatalog(new List<TaggedImage>
+        {
+            // two tags: one matches the weight-2 group, one matches the weight-5 group → score 7
+            new("/both.jpg", new[] { "software", "agent" }, t),
+            // one tag matching weight-5 only → score 5
+            new("/one.jpg", new[] { "agent" }, t),
+        });
+
+        var groups = new[]
+        {
+            new TagMatcher.WeightedTokens(TagMatcher.TokenizeWords(new[] { "agent" }), 5),
+            new TagMatcher.WeightedTokens(TagMatcher.TokenizeWords(new[] { "software" }), 2),
+        };
+
+        var ranked = TagMatcher.Rank(catalog, groups, 5);
+        Assert.Equal(new[] { "/both.jpg", "/one.jpg" }, ranked.Select(r => r.Path));
+    }
+
+    [Fact]
+    public void WeightedRank_NoGroups_ReturnsEmpty()
+    {
+        var catalog = new ImageTagCatalog(new List<TaggedImage>
+        {
+            new("/a.jpg", new[] { "mountain" }, DateTime.UtcNow),
+        });
+        Assert.Empty(TagMatcher.Rank(catalog, Array.Empty<TagMatcher.WeightedTokens>(), 5));
+    }
 }

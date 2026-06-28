@@ -26,10 +26,20 @@ public static partial class TagMatcher
         if (themes is not null)
             sb.Append(string.Join(' ', themes));
 
-        return NonWordRegex().Split(sb.ToString().ToLowerInvariant())
+        return SplitTokens(sb.ToString());
+    }
+
+    /// <summary>Tokenizes a set of short phrases (e.g. tags/categories) the same way as <see cref="Tokenize"/>.</summary>
+    public static IReadOnlyCollection<string> TokenizeWords(IEnumerable<string>? phrases)
+        => phrases is null ? new HashSet<string>(StringComparer.Ordinal) : SplitTokens(string.Join(' ', phrases));
+
+    private static IReadOnlyCollection<string> SplitTokens(string text)
+        => NonWordRegex().Split(text.ToLowerInvariant())
             .Where(t => t.Length >= 3 && !StopWords.IsStopWord(t))
             .ToHashSet(StringComparer.Ordinal);
-    }
+
+    /// <summary>A group of content tokens carrying a relative importance <paramref name="Weight"/>.</summary>
+    public sealed record WeightedTokens(IReadOnlyCollection<string> Tokens, int Weight);
 
     /// <summary>Ranks images by match score (desc), then newest, returning the top <paramref name="limit"/>.</summary>
     public static IReadOnlyList<TaggedImage> Rank(
@@ -54,6 +64,46 @@ public static partial class TagMatcher
             .Take(Math.Max(0, limit))
             .Select(s => s.Img)
             .ToList();
+    }
+
+    /// <summary>
+    /// Weighted ranking: each image scores the sum, over its tags, of the highest weight among the
+    /// <paramref name="groups"/> whose tokens match that tag — so an image matching a high-priority
+    /// source (e.g. author-supplied tags) outranks one matching only a low-priority one. Ordering
+    /// matches the unweighted overload: score desc, then newest; zero-scoring images dropped.
+    /// </summary>
+    public static IReadOnlyList<TaggedImage> Rank(
+        ImageTagCatalog catalog, IReadOnlyList<WeightedTokens> groups, int limit)
+    {
+        if (groups.Count == 0)
+            return Array.Empty<TaggedImage>();
+
+        var scored = new List<(TaggedImage Img, int Score)>();
+        foreach (TaggedImage img in catalog.Images)
+        {
+            if (img.Tags.Count == 0)
+                continue;
+            int score = img.Tags.Sum(tag => TagMatchWeight(tag, groups));
+            if (score > 0)
+                scored.Add((img, score));
+        }
+
+        return scored
+            .OrderByDescending(s => s.Score)
+            .ThenByDescending(s => s.Img.ModifiedUtc)
+            .Take(Math.Max(0, limit))
+            .Select(s => s.Img)
+            .ToList();
+    }
+
+    /// <summary>Highest weight among the groups a tag matches (0 if it matches none).</summary>
+    private static int TagMatchWeight(string tag, IReadOnlyList<WeightedTokens> groups)
+    {
+        int best = 0;
+        foreach (WeightedTokens group in groups)
+            if (group.Weight > best && TagMatchesAny(tag, group.Tokens))
+                best = group.Weight;
+        return best;
     }
 
     private static bool TagMatchesAny(string tag, IReadOnlyCollection<string> tokens)
