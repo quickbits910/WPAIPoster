@@ -91,6 +91,15 @@ public sealed class AppSettings
     public double? MinImageRelevance { get; set; }
 
     /// <summary>
+    /// Coverage floor [0.00-1.00] for theme diversity: a theme is only covered by its own distinct image
+    /// when some candidate scores strictly above this, so slots prefer covering a distinct theme over
+    /// piling a second/third image onto an already-covered one. Independent of
+    /// <see cref="MinImageRelevance"/>. Null uses the default (0.4).
+    /// </summary>
+    [JsonPropertyName("themeCoverageFloor")]
+    public double? ThemeCoverageFloor { get; set; }
+
+    /// <summary>
     /// When true (default), the featured image is steered away from images matching the featured image
     /// of recent published posts (compared by perceptual hash, fetched from WordPress), so consecutive
     /// posts don't reuse the same hero image. Null uses the default (true).

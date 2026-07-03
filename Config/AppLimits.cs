@@ -72,6 +72,15 @@ public static class AppLimits
     public const double DefaultMinImageRelevance = 0.0;
 
     /// <summary>
+    /// Default coverage floor for theme diversity: a theme is only worth covering with its own distinct
+    /// image when some candidate scores strictly above this, so a slot goes to a distinct theme in
+    /// preference to a second/third image of an already-covered theme. Independent of
+    /// <see cref="DefaultMinImageRelevance"/> (which still governs the featured pick and leftover-slot
+    /// fill) — a theme with no candidate above the floor is left for the fill stage, not padded weakly.
+    /// </summary>
+    public const double DefaultThemeCoverageFloor = 0.4;
+
+    /// <summary>
     /// When true, the featured image is steered away from any image matching a recent post's featured
     /// image (by perceptual hash), so consecutive posts don't reuse the same hero image.
     /// </summary>

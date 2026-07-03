@@ -161,6 +161,76 @@ public class ImageRelevanceSelectorTests
     }
 
     [Fact]
+    public void Select_Matching_ReassignsSharedImageSoWeakThemeIsCovered()
+    {
+        // 'x' is theme 0's best AND theme 1's only option above the floor. A greedy best-first pass would
+        // lock x→t0 and leave t1 uncovered; the matching must reassign x→t1 and cover t0 with y.
+        var scored = new[]
+        {
+            Img("x.jpg", new[] { 0.9, 0.5 }),
+            Img("y.jpg", new[] { 0.6, 0.0 }),
+            Img("z.jpg", new[] { 0.4, 0.0 }),
+        };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(2), count: 2, hammingThreshold: NoDedup, coverageFloor: 0.4);
+
+        Assert.Equal(new[] { "x.jpg", "y.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+        Assert.Equal("t1", picks.Single(p => p.Path == "x.jpg").Theme); // reassigned to the weak theme
+        Assert.Equal("t0", picks.Single(p => p.Path == "y.jpg").Theme);
+    }
+
+    [Theory]
+    [InlineData(0.3, false)] // below floor — not worth covering
+    [InlineData(0.4, false)] // exactly at floor — strict '>' means still not covered
+    [InlineData(0.5, true)]  // above floor — covered in preference to a 2nd image of t0
+    public void Select_CoverageFloor_GatesWhetherWeakThemeIsCovered(double weakScore, bool expectCovered)
+    {
+        // Two slots. t0 has two strong images; t1's only image scores 'weakScore'. When it clears the
+        // 0.4 floor the slot covers t1 (w); otherwise it fills with t0's second-best (b).
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.9, 0.0 }),
+            Img("b.jpg", new[] { 0.7, 0.0 }),
+            Img("w.jpg", new[] { 0.0, weakScore }),
+        };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(2), count: 2, hammingThreshold: NoDedup, coverageFloor: 0.4);
+
+        if (expectCovered)
+        {
+            Assert.Equal(new[] { "a.jpg", "w.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+            Assert.Equal("t1", picks.Single(p => p.Path == "w.jpg").Theme);
+        }
+        else
+        {
+            Assert.Equal(new[] { "a.jpg", "b.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+            Assert.DoesNotContain("w.jpg", picks.Select(p => p.Path));
+        }
+    }
+
+    [Fact]
+    public void Select_Matching_ReconcilesNearDuplicateCoverPicks()
+    {
+        // t0's best 'p' and t1's best 'q' are perceptual near-duplicates. The matching covers both, but
+        // reconciliation drops the lower-scored duplicate cover (q), so the fill stage takes the distinct
+        // 'r' instead — never two near-identical images.
+        var scored = new[]
+        {
+            Img("p.jpg", new[] { 0.9, 0.0 }, hash: 0x0),
+            Img("q.jpg", new[] { 0.0, 0.8 }, hash: 0x1),                  // near-dup of p (Hamming 1)
+            Img("r.jpg", new[] { 0.0, 0.5 }, hash: 0xFFFFFFFFFFFFFFFF),   // visually distinct
+        };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(2), count: 2, hammingThreshold: 6, coverageFloor: 0.4);
+
+        Assert.Equal(new[] { "p.jpg", "r.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+        Assert.DoesNotContain("q.jpg", picks.Select(p => p.Path));
+    }
+
+    [Fact]
     public void Select_AvoidsRecentFeatured_ForFeaturedPickButStillSelectsImage()
     {
         var scored = new[]

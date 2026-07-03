@@ -61,9 +61,32 @@ public sealed class SshConfig
     [JsonPropertyName("hostKeyFingerprint")]
     public string? HostKeyFingerprint { get; set; }
 
+    /// <summary>
+    /// Interval, in seconds, between SSH keep-alive messages sent on the connection. Keeps the session
+    /// warm during the long idle gap between connecting and publishing (post generation + editor review +
+    /// vision-scoring can take minutes, during which the server or an intervening NAT/firewall would
+    /// otherwise drop the idle connection). Null/0 falls back to <see cref="EffectiveKeepAliveInterval"/>'s
+    /// default; a negative value disables keep-alives.
+    /// </summary>
+    [JsonPropertyName("keepAliveSeconds")]
+    public int? KeepAliveSeconds { get; set; }
+
     /// <summary>Resolved port, defaulting to 22 when unset.</summary>
     [JsonIgnore]
     public int EffectivePort => Port is > 0 ? Port.Value : 22;
+
+    /// <summary>
+    /// Resolved keep-alive interval: the configured <see cref="KeepAliveSeconds"/> when positive,
+    /// a negative <see cref="TimeSpan"/> (SSH.NET's "disabled" sentinel) when negative, or a 30-second
+    /// default when null/0.
+    /// </summary>
+    [JsonIgnore]
+    public TimeSpan EffectiveKeepAliveInterval => KeepAliveSeconds switch
+    {
+        null or 0 => TimeSpan.FromSeconds(30),
+        < 0 => TimeSpan.FromMilliseconds(-1),
+        _ => TimeSpan.FromSeconds(KeepAliveSeconds.Value),
+    };
 
     /// <summary>Absolute path of the file that was loaded, or null if none was found.</summary>
     [JsonIgnore]

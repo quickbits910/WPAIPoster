@@ -74,6 +74,26 @@ public class SshConfigTests : IDisposable
     }
 
     [Fact]
+    public void EffectiveKeepAliveInterval_DefaultsTo30sWhenUnsetOrZero()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(30), new SshConfig().EffectiveKeepAliveInterval);
+        Assert.Equal(TimeSpan.FromSeconds(30), new SshConfig { KeepAliveSeconds = 0 }.EffectiveKeepAliveInterval);
+    }
+
+    [Fact]
+    public void EffectiveKeepAliveInterval_HonorsPositiveValue()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(15), new SshConfig { KeepAliveSeconds = 15 }.EffectiveKeepAliveInterval);
+    }
+
+    [Fact]
+    public void EffectiveKeepAliveInterval_NegativeDisables()
+    {
+        // SSH.NET treats a negative TimeSpan as "keep-alives disabled".
+        Assert.Equal(TimeSpan.FromMilliseconds(-1), new SshConfig { KeepAliveSeconds = -1 }.EffectiveKeepAliveInterval);
+    }
+
+    [Fact]
     public void Save_RoundTrips()
     {
         string path = Path.Combine(_tempDir, "ssh-config.json");

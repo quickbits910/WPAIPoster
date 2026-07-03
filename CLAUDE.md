@@ -105,10 +105,18 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   reads them tolerantly — each element may be an object *or* a legacy plain string (string → both fields).
 - **Diversity image selection**: `ImageRelevanceSelector` scores each candidate against every theme in one
   vision call (`ParseScores` → `double[]`), then `Select` (pure) assigns the best **distinct** image per
-  theme, fills leftover slots by best score, skips perceptual near-duplicates (`PerceptualHash` dHash +
-  Hamming `imageDedupThreshold`), and never selects an image scoring at/below `minImageRelevance` (so it
-  returns *fewer* images rather than padding with irrelevant ones). The post title/meta description are
-  passed in as scoring context.
+  theme via a **maximum-cardinality bipartite matching** (`AssignThemes`, Kuhn's augmenting paths), fills
+  leftover slots by best score, skips perceptual near-duplicates (`PerceptualHash` dHash + Hamming
+  `imageDedupThreshold`), and never selects an image scoring at/below `minImageRelevance` (so it returns
+  *fewer* images rather than padding with irrelevant ones). The matching (not a greedy best-first pass)
+  ensures a strong theme can't monopolise the **sole** decent image of a weaker theme — the shared image
+  is reassigned so **every coverable theme gets one image first**, before any theme gets a second. A
+  separate **`themeCoverageFloor`** (default 0.4, distinct from `minImageRelevance`) gates *coverage*: a
+  theme is only covered when some candidate scores strictly above it, so a slot goes to a distinct theme in
+  preference to a 2nd/3rd image of an already-covered one — a theme with no image above the floor is left
+  for the fill stage rather than covered weakly. `minImageRelevance` still governs the featured pick and
+  the leftover-slot fill. Near-duplicate cover picks are reconciled away (lower-scored dropped, that theme
+  reverts to fill). The post title/meta description are passed in as scoring context.
 - **Featured-image variety**: `wp media import` re-uploads each image under a fresh GUID, so there is **no
   stored link** between a local file and its WordPress media item. To stop consecutive posts reusing the
   same hero image, `FeaturedHistoryFetcher` (`Wordpress/`) recovers identity by **content**: `wp post list`
@@ -161,6 +169,12 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   `privateKeyPwdEnc` (passphrase that unlocks the private key at `keyPath`) and `passwordEnc`
   (username/password basic auth). Key auth is offered first. `keyPath` resolves **relative to the
   directory of the loaded `ssh-config.json`**.
+- **SSH keep-alive** (anti-idle-timeout): the connection is opened up front but sits **idle for minutes**
+  while the post is generated, reviewed, and every image is vision-scored, so the server (or an intervening
+  NAT/firewall) can drop it — the next command then throws `SshOperationTimeoutException`. `SshNetRunner`
+  sets `KeepAliveInterval` on **both** the SSH and SFTP clients to keep the session warm. The interval comes
+  from `SshConfig.EffectiveKeepAliveInterval` (`keepAliveSeconds` in ssh-config.json: null/0 → 30s default,
+  negative → disabled); the resolver is pure/unit-tested.
 - **SSH host-key verification** (anti-MITM): SSH.NET does not verify host keys by default, so
   `SshNetRunner` registers a `HostKeyReceived` handler. `hostKeyFingerprint` (SHA-256, base64) pins the
   server key; when unset it is **trust-on-first-use** — the first connection's key is learned and written
@@ -189,12 +203,14 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 
 - `app.settings.json` — `provider`, `model`, `visionModel`, `baseUrl`, `apiKey`, `imageLibrary`,
   `autoPublish`, `wordPressFolder`, `maxImagesToScore`, `imagesPerPost`, `maxImagesToIndex`, `tagPrefix`,
-  `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `avoidRecentFeaturedImages`,
+  `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `themeCoverageFloor`,
+  `avoidRecentFeaturedImages`,
   `recentFeaturedHistoryCount`, `recentFeaturedHammingThreshold`, `defaultCategory`,
   `enableEditorReviewer`, `editorReviewerThreshold`, `outputFolder`, `seoMetaKeys`. Nullable (each falls
   back to the matching `AppLimits` default); API key also falls back to `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
 - `ssh-config.json` — `server`, `port`, `username`, `keyPath`, `privateKeyPwdEnc`, `passwordEnc`,
-  `sshExecutablePath` (reserved/unused by the SSH.NET path).
+  `keepAliveSeconds` (SSH keep-alive interval; null/0 → 30s, negative → off), `pinAlgorithms`,
+  `hostKeyFingerprint`, `sshExecutablePath` (reserved/unused by the SSH.NET path).
 
 ## Not yet implemented
 

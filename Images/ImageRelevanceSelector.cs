@@ -49,7 +49,8 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold,
         IReadOnlyDictionary<string, double>? userTagAffinity = null,
         double selectionWeight = AppLimits.DefaultUserTagSelectionWeight,
-        double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight)
+        double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight,
+        double coverageFloor = AppLimits.DefaultThemeCoverageFloor)
     {
         // With no themes, fall back to a single combined pseudo-theme (legacy single-score behaviour).
         IReadOnlyList<ImageTheme> themes = imageThemes.Count > 0
@@ -99,7 +100,7 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
 
         return Select(scored, subjects, count, hammingThreshold, minRelevance,
             recentFeaturedHashes, recentFeaturedThreshold,
-            userTagAffinity, selectionWeight, featuredWeight);
+            userTagAffinity, selectionWeight, featuredWeight, coverageFloor);
     }
 
     /// <summary>
@@ -120,12 +121,22 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
     }
 
     /// <summary>
-    /// Pure selection step. Assigns the best <em>distinct, non-duplicate</em> image to each theme,
-    /// fills remaining slots with the next-best images (by max-across-themes score), and marks the
-    /// single highest-scoring image as featured. Only images scoring strictly above
-    /// <paramref name="minRelevance"/> are ever selected — an irrelevant image is never used to pad a
-    /// theme, so fewer than <paramref name="count"/> images may be returned. Dedup is best-effort:
-    /// it is relaxed (but the relevance floor is not) before the result is allowed to shrink.
+    /// Pure selection step. Assigns the best <em>distinct, non-duplicate</em> image to each theme via a
+    /// maximum-cardinality matching (so every theme that <em>can</em> be covered by a distinct image
+    /// <em>is</em> — a strong theme never "steals" the sole decent image of a weaker theme), fills
+    /// remaining slots with the next-best images (by max-across-themes score), and marks the single
+    /// highest-scoring image as featured. Only images scoring strictly above <paramref name="minRelevance"/>
+    /// are ever selected — an irrelevant image is never used to pad a theme, so fewer than
+    /// <paramref name="count"/> images may be returned. Dedup is best-effort: it is relaxed (but the
+    /// relevance floor is not) before the result is allowed to shrink.
+    /// <para>
+    /// <paramref name="coverageFloor"/> gates <em>theme coverage</em> only: a theme is worth covering
+    /// (given its own distinct image) only when some image scores strictly above it, so slots are spent
+    /// on a distinct theme in preference to a second/third image of an already-covered theme. It is
+    /// independent of <paramref name="minRelevance"/> (which still governs the featured pick and the
+    /// leftover-slot fill); a theme with no image above the floor is left for the fill stage rather than
+    /// covered with a weak image.
+    /// </para>
     /// <para>
     /// When <paramref name="recentFeaturedHashes"/> is supplied, the <em>featured</em> pick is steered
     /// away from any chosen image within <paramref name="recentFeaturedThreshold"/> bits of a recent
@@ -149,7 +160,8 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold,
         IReadOnlyDictionary<string, double>? userTagAffinity = null,
         double selectionWeight = AppLimits.DefaultUserTagSelectionWeight,
-        double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight)
+        double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight,
+        double coverageFloor = 0.0)
     {
         count = Math.Max(0, count);
         if (count == 0 || scored.Count == 0)
@@ -202,26 +214,13 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             }
         }
 
-        // 1) All (image, theme, score) triples, best first; tie-break by path then theme for determinism.
-        var triples = new List<(int Img, int Theme, double Score)>(scored.Count * themeCount);
-        for (int img = 0; img < scored.Count; img++)
-            for (int t = 0; t < themeCount; t++)
-                triples.Add((img, t, ScoreOf(img, t)));
-
-        triples.Sort((a, b) =>
-        {
-            int c = b.Score.CompareTo(a.Score);
-            if (c != 0) return c;
-            c = string.CompareOrdinal(scored[a.Img].Path, scored[b.Img].Path);
-            return c != 0 ? c : a.Theme.CompareTo(b.Theme);
-        });
-
-        // 2) Greedy per-theme assignment: best distinct, non-duplicate, sufficiently-relevant image per theme.
-        foreach (var (img, theme, score) in triples)
+        // 1-2) Per-theme coverage via a maximum-cardinality matching over eligible (image, theme) pairs
+        //      (score strictly above the coverage floor). This guarantees every coverable theme gets a
+        //      distinct image — a strong theme can't monopolise the sole decent image of a weaker one —
+        //      unlike a greedy best-first pass, which would lock that shared image to the strong theme.
+        foreach (var (img, theme) in AssignThemes(scored, themeCount, count, coverageFloor, hammingThreshold))
         {
             if (chosen.Count >= count) break;
-            if (score <= minRelevance) break; // triples are sorted desc — nothing past here qualifies
-            if (coveredTheme[theme] || usedImage[img] || IsDup(img)) continue;
             Add(img, theme, cover: true);
         }
 
@@ -256,6 +255,73 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         return chosen
             .Select(c => new SelectedImage(scored[c.Img].Path, MaxScore(c.Img), c.Img == featured, ThemeName(c.Theme)))
             .ToList();
+    }
+
+    /// <summary>
+    /// Assigns a distinct image to as many themes as possible via a maximum-cardinality bipartite matching
+    /// (Kuhn's augmenting paths) over eligible pairs — an image is eligible for a theme when it scores
+    /// strictly above <paramref name="coverageFloor"/> there. Each theme's candidates are tried in
+    /// score-descending order to bias the (max-cardinality) matching toward higher scores. The result is
+    /// returned score-desc; near-perceptual-duplicate cover picks are reconciled away (the lower-scored of
+    /// a colliding pair is dropped, leaving that theme for the fill stage), and at most
+    /// <paramref name="count"/> assignments are returned.
+    /// </summary>
+    private static IReadOnlyList<(int Img, int Theme)> AssignThemes(
+        IReadOnlyList<ScoredImage> scored, int themeCount, int count,
+        double coverageFloor, int hammingThreshold)
+    {
+        double ScoreOf(int img, int theme) =>
+            theme < scored[img].Scores.Count ? scored[img].Scores[theme] : 0.0;
+
+        // Eligible images per theme, score-desc then path for a deterministic augmenting order.
+        var adj = new List<int>[themeCount];
+        for (int t = 0; t < themeCount; t++)
+        {
+            int theme = t;
+            adj[t] = Enumerable.Range(0, scored.Count)
+                .Where(img => ScoreOf(img, theme) > coverageFloor)
+                .OrderByDescending(img => ScoreOf(img, theme))
+                .ThenBy(img => scored[img].Path, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        var imageToTheme = new int[scored.Count];
+        Array.Fill(imageToTheme, -1);
+
+        bool TryAssign(int theme, bool[] seen)
+        {
+            foreach (int img in adj[theme])
+            {
+                if (seen[img]) continue;
+                seen[img] = true;
+                if (imageToTheme[img] == -1 || TryAssign(imageToTheme[img], seen))
+                {
+                    imageToTheme[img] = theme;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        for (int t = 0; t < themeCount; t++)
+            TryAssign(t, new bool[scored.Count]);
+
+        // Score-desc so the strongest covers win the slot budget and are kept during dedup reconciliation.
+        var assigned = Enumerable.Range(0, scored.Count)
+            .Where(img => imageToTheme[img] != -1)
+            .Select(img => (Img: img, Theme: imageToTheme[img]))
+            .OrderByDescending(a => ScoreOf(a.Img, a.Theme))
+            .ThenBy(a => scored[a.Img].Path, StringComparer.Ordinal);
+
+        var kept = new List<(int Img, int Theme)>();
+        foreach (var a in assigned)
+        {
+            if (kept.Count >= count) break;
+            if (kept.Any(k => PerceptualHash.HammingDistance(scored[k.Img].Hash, scored[a.Img].Hash) <= hammingThreshold))
+                continue; // near-duplicate of an already-kept cover — leave this theme for the fill stage
+            kept.Add(a);
+        }
+        return kept;
     }
 
     /// <summary>

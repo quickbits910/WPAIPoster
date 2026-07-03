@@ -18,10 +18,10 @@ public sealed class SshNetRunner : ISshRunner
     private readonly SshClient _ssh;
     private readonly SftpClient _sftp;
 
-    private SshNetRunner(ConnectionInfo connectionInfo)
+    private SshNetRunner(ConnectionInfo connectionInfo, TimeSpan keepAliveInterval)
     {
-        _ssh = new SshClient(connectionInfo);
-        _sftp = new SftpClient(connectionInfo);
+        _ssh = new SshClient(connectionInfo) { KeepAliveInterval = keepAliveInterval };
+        _sftp = new SftpClient(connectionInfo) { KeepAliveInterval = keepAliveInterval };
     }
 
     /// <summary>
@@ -90,9 +90,11 @@ public sealed class SshNetRunner : ISshRunner
             }
         }
 
+        TimeSpan keepAlive = cfg.EffectiveKeepAliveInterval;
+
         SshNetRunner ConnectVerified(bool pinned)
         {
-            var runner = new SshNetRunner(BuildConnInfo(pinned));
+            var runner = new SshNetRunner(BuildConnInfo(pinned), keepAlive);
             runner._ssh.HostKeyReceived += VerifyHostKey;
             runner._sftp.HostKeyReceived += VerifyHostKey;
             try
@@ -208,7 +210,7 @@ public sealed class SshNetRunner : ISshRunner
 
     private static SshNetRunner ConnectWith(ConnectionInfo connInfo)
     {
-        var runner = new SshNetRunner(connInfo);
+        var runner = new SshNetRunner(connInfo, TimeSpan.FromSeconds(30));
         try
         {
             runner._ssh.Connect();

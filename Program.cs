@@ -91,6 +91,7 @@ string tagPrefix = settings.TagPrefix ?? AppLimits.DefaultTagPrefix;
 int tagCandidateLimit = settings.TagCandidateLimit ?? AppLimits.DefaultTagCandidateLimit;
 int imageDedupThreshold = settings.ImageDedupThreshold ?? AppLimits.DefaultImageDedupThreshold;
 double minImageRelevance = settings.MinImageRelevance ?? AppLimits.DefaultMinImageRelevance;
+double themeCoverageFloor = settings.ThemeCoverageFloor ?? AppLimits.DefaultThemeCoverageFloor;
 bool avoidRecentFeatured = settings.AvoidRecentFeaturedImages ?? AppLimits.DefaultAvoidRecentFeaturedImages;
 int recentFeaturedHistoryCount = settings.RecentFeaturedHistoryCount ?? AppLimits.DefaultRecentFeaturedHistoryCount;
 int recentFeaturedThreshold = settings.RecentFeaturedHammingThreshold ?? AppLimits.DefaultRecentFeaturedHammingThreshold;
@@ -253,7 +254,8 @@ try
                         : $"{name} — relevance {score:0.00} (best theme: {theme})"),
                 recentFeaturedHashes: recentFeatured,
                 recentFeaturedThreshold: recentFeaturedThreshold,
-                userTagAffinity: userTagAffinity));
+                userTagAffinity: userTagAffinity,
+                coverageFloor: themeCoverageFloor));
 
         ui.Success($"Selected {selected.Count} image(s)");
         foreach (SelectedImage img in selected)
