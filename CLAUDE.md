@@ -169,12 +169,22 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   `privateKeyPwdEnc` (passphrase that unlocks the private key at `keyPath`) and `passwordEnc`
   (username/password basic auth). Key auth is offered first. `keyPath` resolves **relative to the
   directory of the loaded `ssh-config.json`**.
-- **SSH keep-alive** (anti-idle-timeout): the connection is opened up front but sits **idle for minutes**
-  while the post is generated, reviewed, and every image is vision-scored, so the server (or an intervening
-  NAT/firewall) can drop it — the next command then throws `SshOperationTimeoutException`. `SshNetRunner`
-  sets `KeepAliveInterval` on **both** the SSH and SFTP clients to keep the session warm. The interval comes
-  from `SshConfig.EffectiveKeepAliveInterval` (`keepAliveSeconds` in ssh-config.json: null/0 → 30s default,
-  negative → disabled); the resolver is pure/unit-tested.
+- **SSH keep-alive + reconnect** (anti-idle-drop): the connection is opened up front but sits **idle for
+  minutes** while the post is generated, reviewed, and every image is vision-scored, so the server (or an
+  intervening NAT/firewall) can drop it. `SshNetRunner` sets `KeepAliveInterval` on **both** the SSH and
+  SFTP clients to keep the session warm; the interval comes from `SshConfig.EffectiveKeepAliveInterval`
+  (`keepAliveSeconds` in ssh-config.json: null/0 → 30s default, negative → disabled; the resolver is
+  pure/unit-tested). But keep-alive only prevents *idle read timeouts* — it **can't stop a server (e.g.
+  shared cPanel hosting) from actively resetting a long-idle session**, which surfaces as `Connection reset
+  by peer` on the publish phase's first op (an SFTP body upload). So `Run`/`UploadFile` route through
+  `WithReconnect`, which on a dropped connection **reconnects and retries the op once** — the same
+  `Establish` closure (auth + host-key verification + pinned-algorithm fallback) that made the first
+  connection rebuilds the clients, and on reconnect the learned fingerprint is verified rather than
+  re-learned, so it stays MITM-safe. The transient-vs-fatal predicate is the pure, unit-tested
+  `IsTransientConnectionError` (reset/closed socket, operation timeout, or `ObjectDisposedException` →
+  retry; `SshAuthenticationException` → surface). Retry is safe in practice because the drop hits the idle
+  first op (the idempotent `canOverride` upload) and the back-to-back publish commands after a fresh
+  reconnect don't idle long enough to drop.
 - **SSH host-key verification** (anti-MITM): SSH.NET does not verify host keys by default, so
   `SshNetRunner` registers a `HostKeyReceived` handler. `hostKeyFingerprint` (SHA-256, base64) pins the
   server key; when unset it is **trust-on-first-use** — the first connection's key is learned and written

@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Renci.SshNet;
@@ -15,13 +16,17 @@ namespace WPAIPoster.Wordpress;
 [ExcludeFromCodeCoverage]
 public sealed class SshNetRunner : ISshRunner
 {
-    private readonly SshClient _ssh;
-    private readonly SftpClient _sftp;
+    private SshClient _ssh;
+    private SftpClient _sftp;
 
-    private SshNetRunner(ConnectionInfo connectionInfo, TimeSpan keepAliveInterval)
+    // Re-establishes a fresh, connected (ssh, sftp) pair using the original auth / host-key wiring.
+    // Called on construction and again by Reconnect() after a dropped connection.
+    private readonly Func<(SshClient Ssh, SftpClient Sftp)> _establish;
+
+    private SshNetRunner(Func<(SshClient Ssh, SftpClient Sftp)> establish)
     {
-        _ssh = new SshClient(connectionInfo) { KeepAliveInterval = keepAliveInterval };
-        _sftp = new SftpClient(connectionInfo) { KeepAliveInterval = keepAliveInterval };
+        _establish = establish;
+        (_ssh, _sftp) = establish();
     }
 
     /// <summary>
@@ -91,40 +96,51 @@ public sealed class SshNetRunner : ISshRunner
         }
 
         TimeSpan keepAlive = cfg.EffectiveKeepAliveInterval;
+        bool forcePinned = cfg.PinAlgorithms == true;
 
-        SshNetRunner ConnectVerified(bool pinned)
+        // Builds a fresh, connected (ssh, sftp) pair with the host-key handler wired and the pinned
+        // fallback applied. Reused verbatim by Reconnect() when a dropped idle connection is retried,
+        // so the anti-MITM / handshake behaviour is identical on reconnection.
+        (SshClient Ssh, SftpClient Sftp) EstablishOnce(bool pinned)
         {
-            var runner = new SshNetRunner(BuildConnInfo(pinned), keepAlive);
-            runner._ssh.HostKeyReceived += VerifyHostKey;
-            runner._sftp.HostKeyReceived += VerifyHostKey;
+            ConnectionInfo ci = BuildConnInfo(pinned);
+            var ssh = new SshClient(ci) { KeepAliveInterval = keepAlive };
+            var sftp = new SftpClient(ci) { KeepAliveInterval = keepAlive };
+            ssh.HostKeyReceived += VerifyHostKey;
+            sftp.HostKeyReceived += VerifyHostKey;
             try
             {
-                runner._ssh.Connect();
-                runner._sftp.Connect();
-                return runner;
+                ssh.Connect();
+                sftp.Connect();
+                return (ssh, sftp);
             }
             catch
             {
-                runner.Dispose();
+                try { ssh.Dispose(); } catch { /* ignore */ }
+                try { sftp.Dispose(); } catch { /* ignore */ }
                 throw;
             }
         }
 
-        bool forcePinned = cfg.PinAlgorithms == true;
-
-        SshNetRunner connected;
-        try
+        (SshClient Ssh, SftpClient Sftp) Establish()
         {
+            mismatch = null;                       // reset per attempt so a stale value can't skew the guard
             try
             {
-                connected = ConnectVerified(forcePinned);
+                return EstablishOnce(forcePinned);
             }
             catch (Exception ex) when (!forcePinned && mismatch is null && ShouldFallBackToPinned(ex))
             {
                 Console.Error.WriteLine(
                     $"SSH handshake failed ({ex.Message.Trim()}); retrying with a pinned modern algorithm set...");
-                connected = ConnectVerified(pinned: true);
+                return EstablishOnce(pinned: true);
             }
+        }
+
+        SshNetRunner connected;
+        try
+        {
+            connected = new SshNetRunner(Establish);
         }
         catch when (mismatch is not null)
         {
@@ -135,16 +151,21 @@ public sealed class SshNetRunner : ISshRunner
         }
 
         // Trust-on-first-use: persist the freshly-seen fingerprint so later connections are verified.
-        if (expectedFp is null && learnedFp is { Length: > 0 } && cfg.LoadedFrom is { Length: > 0 })
+        if (expectedFp is null && learnedFp is { Length: > 0 })
         {
-            cfg.HostKeyFingerprint = learnedFp;
-            try
+            // Verify against this key on any in-process Reconnect() too, rather than re-learning it.
+            expectedFp = learnedFp;
+            if (cfg.LoadedFrom is { Length: > 0 })
             {
-                cfg.Save(cfg.LoadedFrom);
-                Console.Error.WriteLine(
-                    $"Pinned SSH host key SHA256:{learnedFp} to {cfg.LoadedFrom} (trust-on-first-use).");
+                cfg.HostKeyFingerprint = learnedFp;
+                try
+                {
+                    cfg.Save(cfg.LoadedFrom);
+                    Console.Error.WriteLine(
+                        $"Pinned SSH host key SHA256:{learnedFp} to {cfg.LoadedFrom} (trust-on-first-use).");
+                }
+                catch { /* best-effort; verification still happened this run */ }
             }
-            catch { /* best-effort; verification still happened this run */ }
         }
 
         return connected;
@@ -208,22 +229,6 @@ public sealed class SshNetRunner : ISshRunner
                 algos.RemoveAt(i);
     }
 
-    private static SshNetRunner ConnectWith(ConnectionInfo connInfo)
-    {
-        var runner = new SshNetRunner(connInfo, TimeSpan.FromSeconds(30));
-        try
-        {
-            runner._ssh.Connect();
-            runner._sftp.Connect();
-            return runner;
-        }
-        catch
-        {
-            runner.Dispose();
-            throw;
-        }
-    }
-
     /// <summary>
     /// Fall back to pinned algorithms for handshake/crypto failures, but not for genuine auth rejections
     /// (a wrong key/password would fail identically the second time and just obscure the real error).
@@ -280,16 +285,78 @@ public sealed class SshNetRunner : ISshRunner
     }
 
     public SshCommandResult Run(string command)
-    {
-        using var cmd = _ssh.CreateCommand(command);
-        string output = cmd.Execute();
-        return new SshCommandResult(cmd.ExitStatus ?? -1, output, cmd.Error);
-    }
+        => WithReconnect(() =>
+        {
+            using var cmd = _ssh.CreateCommand(command);
+            string output = cmd.Execute();
+            return new SshCommandResult(cmd.ExitStatus ?? -1, output, cmd.Error);
+        });
 
     public void UploadFile(string localPath, string remotePath)
+        => WithReconnect(() =>
+        {
+            // Open the stream inside the lambda so a retry gets a fresh, rewound FileStream.
+            using var fs = File.OpenRead(localPath);
+            _sftp.UploadFile(fs, remotePath, canOverride: true);
+            return true;
+        });
+
+    /// <summary>
+    /// Runs <paramref name="op"/> and, on a dropped connection, reconnects and retries it <b>once</b>.
+    /// The connection is opened up front but sits idle for minutes while the post is generated and every
+    /// image is vision-scored, so a keep-alive can't stop a server (shared hosting) from actively
+    /// resetting the idle session — the first op of the publish phase then throws. Reconnect-and-retry
+    /// re-establishes the session transparently and completes the operation. Non-transient failures
+    /// (auth, a non-zero WP-CLI exit — which isn't an exception) fall straight through.
+    /// <para>
+    /// Idempotency note: in the realistic failure the drop hits the idle first op — the SFTP body upload,
+    /// which is idempotent (<c>canOverride: true</c>) — and the back-to-back commands that follow a fresh
+    /// reconnect don't idle long enough to drop, so re-running a non-idempotent command (e.g.
+    /// <c>wp post create</c>) after a mid-publish reset is effectively theoretical.
+    /// </para>
+    /// </summary>
+    private T WithReconnect<T>(Func<T> op)
     {
-        using var fs = File.OpenRead(localPath);
-        _sftp.UploadFile(fs, remotePath, canOverride: true);
+        try
+        {
+            return op();
+        }
+        catch (Exception ex) when (IsTransientConnectionError(ex))
+        {
+            Reconnect();
+            return op();
+        }
+    }
+
+    /// <summary>Disposes the current clients and re-establishes a fresh, connected pair.</summary>
+    private void Reconnect()
+    {
+        try { if (_sftp.IsConnected) _sftp.Disconnect(); } catch { /* ignore */ }
+        try { if (_ssh.IsConnected) _ssh.Disconnect(); } catch { /* ignore */ }
+        try { _sftp.Dispose(); } catch { /* ignore */ }
+        try { _ssh.Dispose(); } catch { /* ignore */ }
+
+        (_ssh, _sftp) = _establish();
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any inner exception) indicates the SSH/SFTP connection
+    /// dropped and the operation is worth retrying on a fresh session — a reset/closed socket,
+    /// an operation timeout, or an <see cref="ObjectDisposedException"/> SSH.NET throws when the
+    /// underlying session died. A genuine auth rejection (<see cref="SshAuthenticationException"/>)
+    /// is <b>not</b> transient — it would fail identically on retry and must surface.
+    /// </summary>
+    public static bool IsTransientConnectionError(Exception? ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is SshAuthenticationException)
+                return false;
+            if (e is SshConnectionException or SocketException
+                or SshOperationTimeoutException or ObjectDisposedException)
+                return true;
+        }
+        return false;
     }
 
     public void Dispose()

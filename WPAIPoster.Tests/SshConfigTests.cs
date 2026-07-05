@@ -1,8 +1,54 @@
+using System.Net.Sockets;
 using System.Security.Cryptography;
+using Renci.SshNet.Common;
 using WPAIPoster.Config;
 using WPAIPoster.Wordpress;
 
 namespace WPAIPoster.Tests;
+
+public class TransientConnectionErrorTests
+{
+    [Fact]
+    public void SshConnectionException_IsTransient()
+        => Assert.True(SshNetRunner.IsTransientConnectionError(
+            new SshConnectionException("Connection reset by peer")));
+
+    [Fact]
+    public void SshConnectionException_WrappingSocketException_IsTransient()
+    {
+        // The exact shape observed in the wild: a socket reset nested in a connection exception.
+        var ex = new SshConnectionException(
+            "Connection reset by peer", new SocketException((int)SocketError.ConnectionReset));
+        Assert.True(SshNetRunner.IsTransientConnectionError(ex));
+    }
+
+    [Fact]
+    public void SocketException_IsTransient()
+        => Assert.True(SshNetRunner.IsTransientConnectionError(
+            new SocketException((int)SocketError.ConnectionReset)));
+
+    [Fact]
+    public void SshOperationTimeoutException_IsTransient()
+        => Assert.True(SshNetRunner.IsTransientConnectionError(new SshOperationTimeoutException()));
+
+    [Fact]
+    public void ObjectDisposedException_IsTransient()
+        => Assert.True(SshNetRunner.IsTransientConnectionError(new ObjectDisposedException("session")));
+
+    [Fact]
+    public void AuthenticationException_IsNotTransient()
+        => Assert.False(SshNetRunner.IsTransientConnectionError(
+            new SshAuthenticationException("permission denied")));
+
+    [Fact]
+    public void UnrelatedException_IsNotTransient()
+        => Assert.False(SshNetRunner.IsTransientConnectionError(
+            new InvalidOperationException("bad state")));
+
+    [Fact]
+    public void Null_IsNotTransient()
+        => Assert.False(SshNetRunner.IsTransientConnectionError(null));
+}
 
 public class HostKeyFingerprintTests
 {
