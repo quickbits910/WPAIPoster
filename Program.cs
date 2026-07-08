@@ -285,6 +285,16 @@ try
             string tagNote = img.IsFeatured && tagMatch ? ", author-tag match" : "";
             ui.Info($"  {star}{Path.GetFileName(img.Path)} (score {img.Score:0.00}{themeNote}{tagNote}, prepared {size / 1024}KB)");
         }
+
+        // Surface themes the library couldn't illustrate (no selected image landed on them) so a
+        // single-theme result reads as a content gap to fix, not a silent selection quirk.
+        var representedThemes = selected
+            .Select(img => img.Theme)
+            .Where(t => !string.IsNullOrEmpty(t))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (ImageTheme theme in post.ImageThemes)
+            if (!representedThemes.Contains(theme.Subject))
+                ui.Warn($"No library image matched theme '{theme.Subject}' — add relevant imagery or the theme can't be illustrated.");
     }
 
     // 4. Publish.

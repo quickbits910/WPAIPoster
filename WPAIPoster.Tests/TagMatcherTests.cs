@@ -141,6 +141,72 @@ public class TagMatcherTests
         Assert.Empty(TagMatcher.Rank(catalog, Array.Empty<TagMatcher.WeightedTokens>(), 5));
     }
 
+    // ---- RankPerTheme (per-theme balance) ----
+
+    [Fact]
+    public void RankPerTheme_TagDenseThemeCannotCrowdOutThinTheme()
+    {
+        var t = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        // A "code"-dominated library with a single "server" image — the exact shape that collapses a
+        // global top-N onto one theme. Per-theme ranking must still surface the lone server image.
+        var catalog = new ImageTagCatalog(new List<TaggedImage>
+        {
+            new("/code1.jpg", new[] { "code", "software" }, t),
+            new("/code2.jpg", new[] { "code", "developer" }, t),
+            new("/code3.jpg", new[] { "coding", "programming" }, t),
+            new("/server.jpg", new[] { "server", "datacenter" }, t),
+        });
+
+        var themeGroups = new IReadOnlyCollection<string>[]
+        {
+            TagMatcher.TokenizeWords(new[] { "server" }),
+            TagMatcher.TokenizeWords(new[] { "code" }),
+        };
+
+        var perTheme = TagMatcher.RankPerTheme(catalog, themeGroups, Array.Empty<string>(), perThemeLimit: 3);
+
+        Assert.Equal(2, perTheme.Count);
+        Assert.Equal(new[] { "/server.jpg" }, perTheme[0].Select(i => i.Path));       // server theme
+        Assert.Contains("/code1.jpg", perTheme[1].Select(i => i.Path));               // code theme
+        Assert.DoesNotContain("/server.jpg", perTheme[1].Select(i => i.Path));
+    }
+
+    [Fact]
+    public void RankPerTheme_CrossCutTokensBoostButThemeMatchesRankHigher()
+    {
+        var t = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var catalog = new ImageTagCatalog(new List<TaggedImage>
+        {
+            new("/theme.jpg", new[] { "mountain" }, t),   // matches the theme (weight 2)
+            new("/author.jpg", new[] { "laptop" }, t),    // matches only the cross-cut author tag (weight 1)
+        });
+
+        var themeGroups = new IReadOnlyCollection<string>[] { TagMatcher.TokenizeWords(new[] { "mountain" }) };
+        var crossCut = TagMatcher.TokenizeWords(new[] { "laptop" });
+
+        var perTheme = TagMatcher.RankPerTheme(catalog, themeGroups, crossCut, perThemeLimit: 5);
+
+        // Both surface under the theme, but the theme match outranks the cross-cut-only match.
+        Assert.Equal(new[] { "/theme.jpg", "/author.jpg" }, perTheme[0].Select(i => i.Path));
+    }
+
+    [Fact]
+    public void RankPerTheme_RespectsPerThemeLimit()
+    {
+        var t = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var catalog = new ImageTagCatalog(new List<TaggedImage>
+        {
+            new("/a.jpg", new[] { "code" }, t),
+            new("/b.jpg", new[] { "code" }, t),
+            new("/c.jpg", new[] { "code" }, t),
+        });
+
+        var themeGroups = new IReadOnlyCollection<string>[] { TagMatcher.TokenizeWords(new[] { "code" }) };
+        var perTheme = TagMatcher.RankPerTheme(catalog, themeGroups, Array.Empty<string>(), perThemeLimit: 2);
+
+        Assert.Equal(2, perTheme[0].Count);
+    }
+
     // ---- MatchFraction (author-tag affinity) ----
 
     [Fact]

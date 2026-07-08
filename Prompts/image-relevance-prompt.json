@@ -6,8 +6,10 @@
     "Post title: {POST_TITLE}",
     "Post summary: {POST_SUMMARY}",
     "",
-    "Score the attached image against EACH of the following numbered visual themes, judging how relevant it is as an illustration for that specific theme in the context of the post above:",
+    "Score the attached image against EACH of the following numbered visual themes. Each theme is written as 'subject — description':",
     "{IMAGE_THEMES}",
+    "",
+    "Judge how well the image illustrates the theme's SUBJECT for this post. Treat the description as guidance on what is meant, NOT a checklist: an image that clearly depicts the subject should score high even if it does not match every literal detail or exact composition of the description.",
     "",
     "Respond with ONLY a JSON array of numbers between 0 and 1 — one score per theme, in the same order as listed above (e.g. [0.0, 0.8, 0.3]).",
     "Do not add any words, keys, punctuation, or explanation. 0 = not relevant at all, 1 = perfectly relevant."

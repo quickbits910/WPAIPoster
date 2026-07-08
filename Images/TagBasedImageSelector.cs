@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
@@ -8,9 +9,12 @@ using WPAIPoster.Prompts;
 namespace WPAIPoster.Images;
 
 /// <summary>
-/// First-pass image selection using keyword tags. Locally pre-filters the catalog with
-/// <see cref="TagMatcher"/>, then asks the text model to contextually pick the most suitable images
-/// from that shortlist. Returns the selected image paths (best-first); empty when no tags match.
+/// First-pass image selection using keyword tags, structured to keep the shortlist <em>balanced across
+/// themes</em>. It ranks the catalog once <em>per theme</em> (<see cref="TagMatcher.RankPerTheme"/>) so no
+/// tag-dense theme can crowd the others out, then asks the text model to pick the best candidates
+/// <em>per theme</em> and interleaves those picks round-robin. Falls back to the per-theme code ranking
+/// (still round-robin, never a single global order) if the model returns nothing parseable. Returns the
+/// selected image paths (theme-balanced, best-first); empty when no image tags match at all.
 /// </summary>
 public sealed class TagBasedImageSelector(ILlmClient client, string promptTemplate)
 {
@@ -19,47 +23,107 @@ public sealed class TagBasedImageSelector(ILlmClient client, string promptTempla
         => new(client, PromptLoader.Load(PromptLoader.TagToBodyPromptFile).GetPromptText());
 
     /// <summary>
-    /// Ranks the catalog by weighted tag relevance to <paramref name="post"/> (and any author-supplied
-    /// <paramref name="userTags"/>), asks the model to pick from the top <paramref name="candidateLimit"/>,
-    /// and returns the chosen paths. Falls back to the local ranking if the model returns nothing parseable;
-    /// returns empty if no image tags match the content at all. Sources are weighted highest-first:
-    /// author tags, post tags, image themes, categories, then the H1/body text as a background signal.
+    /// Ranks the catalog per theme (top <paramref name="candidateLimit"/> spread across themes), asks the
+    /// model to pick the best images for EACH theme, and returns a theme-balanced, round-robin-interleaved
+    /// list of paths. Author-supplied <paramref name="userTags"/> and the post tags act as a cross-cutting
+    /// boost so a strongly-tagged image is surfaced under every theme. Returns empty if no image tags match
+    /// the content at all.
     /// </summary>
     public async Task<IReadOnlyList<string>> SelectAsync(
         ImageTagCatalog catalog, BlogPostResult post, int candidateLimit, IReadOnlyList<string>? userTags = null)
     {
-        var groups = new List<TagMatcher.WeightedTokens>
-        {
-            new(TagMatcher.TokenizeWords(userTags), AppLimits.TagWeightUserProvided),
-            new(TagMatcher.TokenizeWords(post.Tags), AppLimits.TagWeightTags),
-            new(TagMatcher.TokenizeWords(post.ImageThemes.Select(t => t.Subject)), AppLimits.TagWeightThemes),
-            new(TagMatcher.TokenizeWords(post.Categories), AppLimits.TagWeightCategories),
-            new(TagMatcher.Tokenize(post.H1, post.BodyHtml, null), AppLimits.TagWeightBodyBackground),
-        };
-        IReadOnlyList<TaggedImage> candidates = TagMatcher.Rank(catalog, groups, candidateLimit);
-        if (candidates.Count == 0)
+        // Fall back to a single pseudo-theme (H1) when the model proposed none.
+        IReadOnlyList<ImageTheme> themes = post.ImageThemes.Count > 0
+            ? post.ImageThemes
+            : new[] { new ImageTheme("the post topic", post.H1) };
+
+        var themeTokenGroups = themes
+            .Select(t => TagMatcher.TokenizeWords(new[] { t.Subject, t.Description }))
+            .ToList();
+        // Author tags + post tags boost every theme so [TAGS:]-preferred imagery still surfaces.
+        IReadOnlyCollection<string> crossCut =
+            TagMatcher.TokenizeWords((userTags ?? Array.Empty<string>()).Concat(post.Tags));
+
+        int perThemeLimit = Math.Max(3, (int)Math.Ceiling(candidateLimit / (double)themes.Count));
+        IReadOnlyList<IReadOnlyList<TaggedImage>> perTheme =
+            TagMatcher.RankPerTheme(catalog, themeTokenGroups, crossCut, perThemeLimit);
+
+        // Deduped candidate union, numbered 1..N in theme-major order.
+        var union = new List<TaggedImage>();
+        var indexOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (IReadOnlyList<TaggedImage> list in perTheme)
+            foreach (TaggedImage img in list)
+                if (indexOf.TryAdd(img.Path, union.Count))
+                    union.Add(img);
+
+        if (union.Count == 0)
             return Array.Empty<string>();
 
-        string prompt = BuildPrompt(promptTemplate, post, candidates);
+        string prompt = BuildPrompt(promptTemplate, post, themes, union, perTheme);
         string? reply = await client.SendAsync(prompt, null, null);
 
-        IReadOnlyList<int> picks = ParseSelectedIndices(reply, candidates.Count);
-        if (picks.Count == 0)
-            return candidates.Select(c => c.Path).ToList(); // model unhelpful → keep local ranking
+        IReadOnlyList<IReadOnlyList<int>> byTheme = ParseSelectedByTheme(reply, themes.Count, union.Count);
 
-        return picks.Select(i => candidates[i - 1].Path).ToList();
+        // Model picks (candidate numbers → paths) per theme, or the per-theme code ranking as a balanced
+        // fallback when the reply is unparseable — never collapse to a single global order.
+        IReadOnlyList<IReadOnlyList<string>> selectionByTheme =
+            byTheme.Any(l => l.Count > 0)
+                ? byTheme.Select(nums => (IReadOnlyList<string>)nums.Select(n => union[n - 1].Path).ToList()).ToList()
+                : perTheme.Select(list => (IReadOnlyList<string>)list.Select(i => i.Path).ToList()).ToList();
+
+        return InterleaveRoundRobin(selectionByTheme);
     }
 
-    /// <summary>Fills the prompt tokens; the candidate list is numbered 1..N with each image's tags.</summary>
-    public static string BuildPrompt(string template, BlogPostResult post, IReadOnlyList<TaggedImage> candidates)
+    /// <summary>
+    /// Interleaves per-theme ordered lists round-robin (1st of each theme, then 2nd, …), deduping across
+    /// themes in first-seen order — so the head of the result is balanced across themes and the downstream
+    /// vision-scoring cap keeps a diverse set.
+    /// </summary>
+    public static IReadOnlyList<string> InterleaveRoundRobin(IReadOnlyList<IReadOnlyList<string>> perTheme)
     {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        int maxLen = perTheme.Count == 0 ? 0 : perTheme.Max(l => l.Count);
+        for (int round = 0; round < maxLen; round++)
+            foreach (IReadOnlyList<string> list in perTheme)
+                if (round < list.Count && seen.Add(list[round]))
+                    result.Add(list[round]);
+        return result;
+    }
+
+    /// <summary>
+    /// Fills the prompt tokens: the numbered themes (subject — description), and the numbered candidate
+    /// union with each image's tags and a hint of which theme number(s) surfaced it.
+    /// </summary>
+    public static string BuildPrompt(
+        string template, BlogPostResult post, IReadOnlyList<ImageTheme> themes,
+        IReadOnlyList<TaggedImage> candidates, IReadOnlyList<IReadOnlyList<TaggedImage>> perTheme)
+    {
+        var themeList = new StringBuilder();
+        for (int i = 0; i < themes.Count; i++)
+            themeList.Append(i + 1).Append(". ").Append(themes[i].Subject)
+                     .Append(" — ").AppendLine(themes[i].Description);
+
+        // Which theme number(s) each candidate matched (for a hint only; the model may pick any candidate).
+        var indexOf = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < candidates.Count; i++)
+            indexOf[candidates[i].Path] = i;
+        var members = new List<int>[candidates.Count];
+        for (int i = 0; i < candidates.Count; i++)
+            members[i] = new List<int>();
+        for (int t = 0; t < perTheme.Count; t++)
+            foreach (TaggedImage img in perTheme[t])
+                if (indexOf.TryGetValue(img.Path, out int idx))
+                    members[idx].Add(t + 1);
+
         var list = new StringBuilder();
         for (int i = 0; i < candidates.Count; i++)
-            list.AppendLine($"{i + 1}. {string.Join(", ", candidates[i].Tags)}");
+            list.Append(i + 1).Append(". [themes ").Append(string.Join(",", members[i])).Append("] ")
+                .AppendLine(string.Join(", ", candidates[i].Tags));
 
         return template
             .Replace("{TITLE}", post.H1)
-            .Replace("{IMAGE_THEMES}", string.Join(", ", post.ImageThemes.Select(t => t.Subject)))
+            .Replace("{THEMES}", themeList.ToString().TrimEnd())
             .Replace("{BODY}", BodyContext(post.BodyHtml))
             .Replace("{TAGGED_IMAGES}", list.ToString().TrimEnd());
     }
@@ -73,8 +137,68 @@ public sealed class TagBasedImageSelector(ILlmClient client, string promptTempla
     }
 
     /// <summary>
-    /// Extracts 1-based image numbers from the model reply (preferring the contents of the first JSON
-    /// array), keeping only those in [1, count], deduped in first-seen order.
+    /// Parses the per-theme selection object <c>{"1":[4,19], "2":[], "3":[1,15]}</c> (theme number → image
+    /// numbers). Tolerant of surrounding prose/fences (isolates the first <c>{…}</c>); keys must be theme
+    /// numbers in <c>[1, themeCount]</c> and values image numbers in <c>[1, candidateCount]</c> (deduped,
+    /// first-seen). Returns a list of empty lists (triggering the code fallback) on any unparseable reply
+    /// or a non-object (e.g. the model returned a bare array). Index-aligned to the themes.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<int>> ParseSelectedByTheme(
+        string? reply, int themeCount, int candidateCount)
+    {
+        var result = new List<List<int>>();
+        for (int i = 0; i < Math.Max(0, themeCount); i++)
+            result.Add(new List<int>());
+
+        if (string.IsNullOrWhiteSpace(reply) || themeCount <= 0 || candidateCount <= 0)
+            return Cast(result);
+
+        int lb = reply.IndexOf('{');
+        int rb = reply.LastIndexOf('}');
+        if (lb < 0 || rb <= lb)
+            return Cast(result);
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(reply[lb..(rb + 1)]);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return Cast(result);
+
+            foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
+            {
+                if (!int.TryParse(prop.Name.Trim(), out int k) || k < 1 || k > themeCount)
+                    continue;
+                if (prop.Value.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                var seen = new HashSet<int>();
+                foreach (JsonElement el in prop.Value.EnumerateArray())
+                {
+                    int n;
+                    if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out n)) { }
+                    else if (el.ValueKind == JsonValueKind.String && int.TryParse(el.GetString(), out n)) { }
+                    else continue;
+
+                    if (n >= 1 && n <= candidateCount && seen.Add(n))
+                        result[k - 1].Add(n);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Unparseable object — leave empty lists so SelectAsync falls back to the code ranking.
+        }
+
+        return Cast(result);
+    }
+
+    private static IReadOnlyList<IReadOnlyList<int>> Cast(List<List<int>> lists)
+        => lists.Select(l => (IReadOnlyList<int>)l).ToList();
+
+    /// <summary>
+    /// Extracts 1-based image numbers from a bare model reply (preferring the contents of the first JSON
+    /// array), keeping only those in [1, count], deduped in first-seen order. Retained for callers/tests
+    /// that expect a single flat pick list.
     /// </summary>
     public static IReadOnlyList<int> ParseSelectedIndices(string? reply, int count)
     {

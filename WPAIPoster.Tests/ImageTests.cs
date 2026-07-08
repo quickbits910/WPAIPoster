@@ -1,6 +1,7 @@
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
 using WPAIPoster.Images;
 
@@ -134,6 +135,49 @@ public class ImageRelevanceSelectorTests
     public void ParseScores_EmptyReply_AllZero()
     {
         Assert.Equal(new[] { 0.0, 0.0 }, ImageRelevanceSelector.ParseScores("", 2));
+    }
+
+    [Fact]
+    public void BuildPrompt_ListsThemesAsSubjectAndDescription()
+    {
+        const string tmpl = "Title:{POST_TITLE} Sum:{POST_SUMMARY}\n{IMAGE_THEMES}";
+        var themes = new List<ImageTheme>
+        {
+            new("code", "source code on a developer's screen"),
+            new("network", "interconnected servers"),
+        };
+
+        string prompt = ImageRelevanceSelector.BuildPrompt(tmpl, themes, "My Post", "A summary");
+
+        Assert.Contains("Title:My Post", prompt);
+        Assert.Contains("Sum:A summary", prompt);
+        Assert.Contains("1. code — source code on a developer's screen", prompt); // subject AND description
+        Assert.Contains("2. network — interconnected servers", prompt);
+    }
+
+    [Fact]
+    public void Select_AuthorTagAffinity_ExemptsImageFromRelevanceFloor()
+    {
+        // 'm' scores at/below the relevance floor but carries an author tag (affinity 1.0). It must still be
+        // selected — and its affinity blend makes it the featured pick — where pure vision would drop it.
+        var scored = new[]
+        {
+            Img("a.jpg", new[] { 0.5 }, hash: 0x0),
+            Img("m.jpg", new[] { 0.10 }, hash: 0xFFFFFFFFFFFFFFFF),
+        };
+        var affinity = new Dictionary<string, double> { ["m.jpg"] = 1.0 };
+
+        var picks = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup,
+            minRelevance: 0.1, coverageFloor: 0.4, userTagAffinity: affinity);
+
+        Assert.Equal(new[] { "a.jpg", "m.jpg" }, picks.Select(p => p.Path).OrderBy(p => p));
+        Assert.Equal("m.jpg", picks.Single(p => p.IsFeatured).Path); // 0.10 + 0.5·1.0 = 0.60 beats a's 0.50
+
+        // Regression: with no affinity map, the sub-floor image is dropped, not padded in.
+        var noTags = ImageRelevanceSelector.Select(
+            scored, Themes(1), count: 2, hammingThreshold: NoDedup, minRelevance: 0.1, coverageFloor: 0.4);
+        Assert.Equal(new[] { "a.jpg" }, noTags.Select(p => p.Path));
     }
 
     [Fact]

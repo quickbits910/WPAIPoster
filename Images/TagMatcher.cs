@@ -96,6 +96,34 @@ public static partial class TagMatcher
             .ToList();
     }
 
+    /// <summary>
+    /// Ranks the catalog <em>separately for each theme</em> so every theme's best tag matches survive the
+    /// pre-filter — a tag-dense theme (e.g. "code") can no longer crowd the thinner themes out of a single
+    /// global top-N. For each theme, images are scored by that theme's own tokens (weight 2) plus a
+    /// cross-cutting boost (weight 1) from <paramref name="crossCutTokens"/> (the author/post tags, so a
+    /// strongly author-tagged image is still surfaced under every theme). Each theme returns its top
+    /// <paramref name="perThemeLimit"/> (score desc, then newest — same ordering as <see cref="Rank(ImageTagCatalog, IReadOnlyList{WeightedTokens}, int)"/>).
+    /// The returned lists are index-aligned to <paramref name="themeTokenGroups"/>.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<TaggedImage>> RankPerTheme(
+        ImageTagCatalog catalog,
+        IReadOnlyList<IReadOnlyCollection<string>> themeTokenGroups,
+        IReadOnlyCollection<string> crossCutTokens,
+        int perThemeLimit)
+    {
+        var result = new List<IReadOnlyList<TaggedImage>>(themeTokenGroups.Count);
+        foreach (IReadOnlyCollection<string> themeTokens in themeTokenGroups)
+        {
+            var groups = new List<WeightedTokens>
+            {
+                new(themeTokens, 2),
+                new(crossCutTokens, 1),
+            };
+            result.Add(Rank(catalog, groups, perThemeLimit));
+        }
+        return result;
+    }
+
     /// <summary>Highest weight among the groups a tag matches (0 if it matches none).</summary>
     private static int TagMatchWeight(string tag, IReadOnlyList<WeightedTokens> groups)
     {

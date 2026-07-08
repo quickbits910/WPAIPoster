@@ -104,15 +104,19 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
     }
 
     /// <summary>
-    /// Builds the scoring prompt: injects the post title/summary for context and the theme
-    /// <em>descriptions</em> as a numbered list (matching the per-theme score array the model returns).
+    /// Builds the scoring prompt: injects the post title/summary for context and each theme as a numbered
+    /// <c>subject — description</c> line (matching the per-theme score array the model returns). Including
+    /// the broad <em>subject</em> — not just the specific description — lets a genuinely on-subject image
+    /// score well even when it doesn't match every literal detail of the description (e.g. a developer's
+    /// screen scoring on a "code" subject whose description named an exact split-screen layout).
     /// </summary>
     public static string BuildPrompt(
         string template, IReadOnlyList<ImageTheme> themes, string postTitle, string postSummary)
     {
         var sb = new StringBuilder();
         for (int i = 0; i < themes.Count; i++)
-            sb.Append(i + 1).Append(". ").AppendLine(themes[i].Description);
+            sb.Append(i + 1).Append(". ").Append(themes[i].Subject)
+              .Append(" — ").AppendLine(themes[i].Description);
 
         return template
             .Replace("{POST_TITLE}", postTitle ?? string.Empty)
@@ -148,9 +152,12 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
     /// When <paramref name="userTagAffinity"/> is supplied (path → fraction of the author's
     /// <c>[TAGS:]</c> matched, 0-1), it boosts an image's effective score when filling leftover slots
     /// (by <paramref name="selectionWeight"/>) and, more strongly, in the featured blend
-    /// (<c>visionScore + <paramref name="featuredWeight"/> × affinity</c>). Theme coverage stays purely
-    /// vision-driven; affinity defaults to 0 for any path not in the map, so an absent map reproduces the
-    /// pure-vision behaviour exactly.
+    /// (<c>visionScore + <paramref name="featuredWeight"/> × affinity</c>). An image with a non-zero
+    /// affinity is also <em>exempt from the <paramref name="minRelevance"/> floor</em>, so a subject the
+    /// author explicitly tagged can still be used even when the vision model scores it low (it competes on
+    /// the affinity-blended fill ordering and is still deduped). Theme coverage stays purely vision-driven;
+    /// affinity defaults to 0 for any path not in the map, so an absent map reproduces the pure-vision
+    /// behaviour exactly.
     /// </para>
     /// </summary>
     public static IReadOnlyList<SelectedImage> Select(
@@ -190,7 +197,12 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             return bi;
         }
 
-        bool Eligible(int img) => MaxScore(img) > minRelevance;
+        // Author-tag-matched images (affinity > 0) are exempt from the relevance floor: when the author
+        // explicitly tagged a subject via [TAGS:], an image carrying that tag should be usable even if the
+        // vision model scored it low against the generated themes — otherwise the tag the author typed can
+        // be silently vetoed. Such images still compete on the affinity-blended fill ordering below and are
+        // still subject to dedup, so this widens eligibility without forcing an irrelevant duplicate in.
+        bool Eligible(int img) => MaxScore(img) > minRelevance || Aff(img) > 0;
 
         bool IsDup(int img) =>
             chosen.Any(c => PerceptualHash.HammingDistance(scored[c.Img].Hash, scored[img].Hash) <= hammingThreshold);

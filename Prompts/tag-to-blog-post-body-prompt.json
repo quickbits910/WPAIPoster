@@ -1,22 +1,26 @@
 {
   "prompt": [
     "You are selecting which library images best illustrate a WordPress blog post, using only each image's keyword tags.",
+    "You must choose images SEPARATELY FOR EACH image theme, so the post ends up with visual variety rather than several near-identical images.",
     "",
     "Post title: {TITLE}",
     "",
-    "Intended image themes (consider these alongside the tags): {IMAGE_THEMES}",
+    "Image themes (numbered):",
+    "{THEMES}",
     "",
     "Post body (for context):",
     "{BODY}",
     "",
-    "Candidate images (each numbered, followed by its keyword tags):",
+    "Candidate images (each numbered, then a hint of which theme number(s) its tags matched, then its keyword tags):",
     "{TAGGED_IMAGES}",
     "",
-    "Task: pick the images whose tags are contextually relevant to the post's subject matter and the image themes.",
-    "Match on meaning, not just exact words: ignore common/stop words (a, the, and, then, of, to, etc.), allow",
-    "singular/plural and partial-word matches, and prefer images whose tags clearly relate to the post topic.",
-    "Order your selection best-first. If nothing is relevant, return an empty array.",
+    "Task: for EACH theme above, choose up to 4 candidate image numbers whose tags best illustrate THAT specific theme, best first.",
+    "Match on meaning, not just exact words: ignore common/stop words (a, the, and, then, of, to, etc.), allow singular/plural",
+    "and partial-word matches, and prefer images whose tags clearly relate to that theme. The '[themes ...]' hint is only a",
+    "suggestion — you may pick any candidate for any theme, and the same image may suit more than one theme.",
+    "If a theme has no genuinely suitable image, use an empty list for it — do NOT pad it with irrelevant images.",
     "",
-    "Return ONLY a JSON array of the selected image numbers, best first, e.g. [3, 1, 7]. No other text."
+    "Return ONLY a JSON object mapping each theme NUMBER (as a string) to an array of image numbers, best first,",
+    "e.g. {\"1\": [4, 19], \"2\": [], \"3\": [1, 15]}. No other text."
   ]
 }

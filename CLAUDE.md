@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (287 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (303 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -56,14 +56,15 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 4. *(Optional, when `enableEditorReviewer`)* `EditorReviewer` scores the draft; if below
    `editorReviewerThreshold`, `BlogPostGenerator.GenerateAsync` re-runs with the editor feedback appended
    (capped at `AppLimits.MaxEditorRevisions` rewrites). A flaky/unparseable review never blocks publishing.
-5. `ImageLibraryScanner.ScanWithTags` → `TagBasedImageSelector` (cheap **weighted** tag pre-filter:
-   author `[TAGS:]` > post tags > theme subjects > categories > H1/body — see *weighted image ranking*) →
-   `CandidateSet.Build` → `ImageRelevanceSelector` (one vision call per image scores it against **every**
-   theme description, with post title/summary as context) → diversity assignment (`Select`: best distinct
-   image per theme, `PerceptualHash` dedup, `minImageRelevance` floor) → `ImagePreparer` recompresses the
-   chosen images under the 500 KB cap. Before scoring, when `avoidRecentFeaturedImages`,
-   `FeaturedHistoryFetcher` fetches recent posts' featured images and passes their dHashes to `Select`,
-   which steers the **featured** pick away from any match (see *featured-image variety* below).
+5. `ImageLibraryScanner.ScanWithTags` → `TagBasedImageSelector` (**per-theme, theme-balanced** tag
+   pre-filter — see *theme-balanced image selection*) → `CandidateSet.Build` → `ImageRelevanceSelector`
+   (one vision call per image scores it against **every** theme description, with post title/summary as
+   context) → diversity assignment (`Select`: best distinct image per theme, `PerceptualHash` dedup,
+   `minImageRelevance` floor) → `ImagePreparer` recompresses the chosen images under the 500 KB cap.
+   `Program.cs` then **warns** for any theme with no selected image (a library content gap). Before
+   scoring, when `avoidRecentFeaturedImages`, `FeaturedHistoryFetcher` fetches recent posts' featured
+   images and passes their dHashes to `Select`, which steers the **featured** pick away from any match
+   (see *featured-image variety* below).
 6. `WpCliPublisher` publishes: SFTP body → `wp post create` → SEO meta → `wp media import`
    (featured + inline) → embed image URLs → `wp post update` → clean up remote temp files.
 
@@ -108,7 +109,13 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   theme via a **maximum-cardinality bipartite matching** (`AssignThemes`, Kuhn's augmenting paths), fills
   leftover slots by best score, skips perceptual near-duplicates (`PerceptualHash` dHash + Hamming
   `imageDedupThreshold`), and never selects an image scoring at/below `minImageRelevance` (so it returns
-  *fewer* images rather than padding with irrelevant ones). The matching (not a greedy best-first pass)
+  *fewer* images rather than padding with irrelevant ones) — **except** an image whose author-`[TAGS:]`
+  affinity is non-zero, which is *exempt from the floor* so a subject the author explicitly tagged is
+  usable even when vision scores it low (see *author `[TAGS:]` directive*). Each theme is scored as a
+  `subject — description` line (`BuildPrompt`), and the vision prompt is told to judge the **subject**,
+  treating the description as guidance not a literal checklist — so a genuinely on-subject image (e.g. a
+  developer's screen for a "code" subject) isn't zeroed out for missing an exact composition the model
+  invented. The matching (not a greedy best-first pass)
   ensures a strong theme can't monopolise the **sole** decent image of a weaker theme — the shared image
   is reassigned so **every coverable theme gets one image first**, before any theme gets a second. A
   separate **`themeCoverageFloor`** (default 0.4, distinct from `minImageRelevance`) gates *coverage*: a
@@ -134,13 +141,25 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   `{ score, feedback }`; `ParseReview` reuses `BlogPostParser`'s extract/repair and returns an *unscored*
   (`NaN`) review on unparseable replies so it fails safe (never blocks publishing). Gated by
   `enableEditorReviewer` / `editorReviewerThreshold`; the rewrite loop lives in `Program.cs`.
+- **Theme-balanced image selection** (`TagBasedImageSelector`): the tag pre-filter is structured so the
+  shortlist sent to vision-scoring is **balanced across themes**, not dominated by whichever theme has the
+  most tagged images (the failure that produced 4 near-identical "code" images for a post whose other
+  themes the library couldn't illustrate). Flow: `TagMatcher.RankPerTheme` ranks the catalog **once per
+  theme** (subject+description tokens, weight 2) with author/post tags as a **cross-cutting boost**
+  (weight 1) so a strongly-tagged image still surfaces under every theme; each theme keeps its own top-K
+  (`⌈candidateLimit / themeCount⌉`). The per-theme lists are unioned into one numbered candidate list, and
+  the model is asked (prompt `tag-to-blog-post-body-prompt.json`) to pick the best images **per theme** as
+  a JSON object `{"1":[4,19],"2":[],...}` (theme number → image numbers); `ParseSelectedByTheme` reads it
+  tolerantly. `InterleaveRoundRobin` then interleaves the per-theme picks (1st of each theme, then 2nd, …,
+  deduped) so the head of the shortlist — the part `CandidateSet.Build` keeps under `maxImagesToScore` —
+  is theme-diverse. If the model reply is unparseable, it **falls back to the per-theme code ranking**
+  (still round-robin — never a single global order). Note: theme *coverage* among the final images is still
+  decided downstream by vision + `themeCoverageFloor`/`minImageRelevance` in `ImageRelevanceSelector`
+  (fill remains relevance-ranked; a below-floor theme does not displace a stronger repeat).
 - **Weighted image ranking**: `TagMatcher.Rank(catalog, WeightedTokens[], limit)` scores each library
-  image by the **sum over its tags of the highest matching source weight**, so high-priority signals
-  dominate the candidate set sent to vision-scoring. `TagBasedImageSelector` builds the groups from the
-  `BlogPostResult` in priority order — author tags > `post.Tags` > theme subjects > `post.Categories` >
-  H1/body background — using the `AppLimits.TagWeight*` constants. The old unweighted `Rank`/`Tokenize`
-  overloads are kept for back-compat. `WordsMatch`/`TagWords` (flexible substring/plural/stem matching)
-  are shared by both.
+  image by the **sum over its tags of the highest matching source weight**. `RankPerTheme` (above) builds
+  on it. The old unweighted `Rank`/`Tokenize` overloads are kept for back-compat. `WordsMatch`/`TagWords`
+  (flexible substring/plural/stem matching) are shared by all.
 - **Author `[TAGS:]` directive**: the brief may include `[TAGS: Agent, Workflow, MCP]`. `BriefTags.Parse`
   (pure) extracts these as the highest-priority "UserProvided" signal for image selection and **strips**
   the directive from the brief so it never reaches the generator or the published post. Parsed in
@@ -148,8 +167,11 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   feed the **vision stage**: `Program.cs` builds a per-candidate *affinity* (`TagMatcher.MatchFraction` —
   fraction of author tags an image's tags match, 0-1) and passes it to `ImageRelevanceSelector.Select`,
   which boosts fill-slot ordering (`DefaultUserTagSelectionWeight`) and, more strongly, the featured blend
-  `visionScore + DefaultUserTagFeaturedWeight × affinity`. Theme coverage stays purely vision-driven, and
-  an absent affinity map reproduces the pure-vision behaviour exactly.
+  `visionScore + DefaultUserTagFeaturedWeight × affinity`. An image with non-zero affinity is also **exempt
+  from the `minImageRelevance` floor** — an explicitly-tagged subject (e.g. `[TAGS: MinerU]` → the one
+  MinerU-branded image) can't be silently vetoed by a low vision score; it still competes on the blended
+  fill ordering and is still deduped. Theme coverage stays purely vision-driven, and an absent affinity map
+  reproduces the pure-vision behaviour exactly.
 - **Link handling / URL integrity** (`BlogPost/`): three pure, unit-tested post-processors run over the
   body in `Program.cs` right after generation, in this order. (1) `LinkIntegrity.Guard` validates every
   `<a href>` against the URLs we actually gave the model — the existing-post list (internal links) plus the
@@ -210,9 +232,10 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   Set secrets via the `--set-key-password` / `--set-ssh-password` verbs, not by hand.
 - **Testability**: `ISshRunner` and `ILlmClient` are interfaces with fakes in `Tests/Fakes.cs`.
   `WpCliPublisher`, `ImageRelevanceSelector`, `EditorReviewer`, `BlogPostParser`, `PerceptualHash`,
-  `LinkIntegrity`, and
+  `LinkIntegrity`, `TagMatcher`, `TagBasedImageSelector`, and
   `FeaturedHistoryFetcher` expose pure helpers (`Select`, `ParseScore`/`ParseScores`, `BuildPrompt`,
-  `RepairJson`, `ParseReview`, `Compute`/`HammingDistance`/`IsWithinAny`, `ParsePostIds`, `Guard`, command builders)
+  `RepairJson`, `ParseReview`, `Compute`/`HammingDistance`/`IsWithinAny`, `ParsePostIds`, `Guard`,
+  `RankPerTheme`, `ParseSelectedByTheme`/`InterleaveRoundRobin`, command builders)
   so logic can be tested without a server or model. `FeaturedHistoryFetcher` takes the image download as a
   `Func<string, Stream?>` so its orchestration is exercised with a fake runner + canned image bytes.
 - **Nested test project gotcha**: because `WPAIPoster.Tests/` is inside the main project dir, the main
