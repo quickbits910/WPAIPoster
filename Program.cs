@@ -184,6 +184,21 @@ try
         }
     }
 
+    // Repair URLs the model corrupted (it routinely mangles links it was handed verbatim) against the
+    // URLs we actually gave it: the existing-post list + the brief's source links. Runs before the
+    // Sources backstop so a repaired inline brief link is seen as present and not duplicated below.
+    var knownUrls = existing.Select(p => p.Url)
+        .Concat(briefLinks)
+        .Where(u => !string.IsNullOrWhiteSpace(u));
+    post.BodyHtml = LinkIntegrity.Guard(post.BodyHtml, knownUrls, out var linkFixes);
+    foreach (LinkFix fix in linkFixes)
+    {
+        if (fix.IsRemoval)
+            ui.Warn($"Removed a broken link the model invented: {fix.OriginalHref}");
+        else
+            ui.Info($"Repaired a corrupted link: {fix.OriginalHref} -> {fix.NewHref}");
+    }
+
     // Guarantee every brief URL made it into the body (append a Sources list for any the model dropped).
     string ensuredBody = BriefLinks.EnsureLinksPresent(post.BodyHtml, briefLinks);
     if (!ReferenceEquals(ensuredBody, post.BodyHtml))

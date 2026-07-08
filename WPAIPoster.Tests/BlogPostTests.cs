@@ -559,6 +559,135 @@ public class ExternalLinksTests
     }
 }
 
+public class LinkIntegrityTests
+{
+    private static readonly string[] Known =
+    {
+        "https://lukeosborne.au/2026/06/beyond-json-tool-calls-mastering-smarter-agents-with-smolagents/",
+        "https://huggingface.co/meituan-longcat/LongCat-2.0",
+    };
+
+    [Fact]
+    public void Guard_RepairsHostCorruptedWithWhitespaceAndDuplication()
+    {
+        // Real failure: the model injected a space + duplicated text into a host it was handed verbatim.
+        const string body =
+            "<p>See <a href='https://lukeos Osborne.au/2026/06/beyond-json-tool-calls-mastering-smarter-agents-with-smolagents/'>smolagents</a>.</p>";
+
+        string result = LinkIntegrity.Guard(body, Known, out var fixes);
+
+        Assert.Contains(
+            "<a href='https://lukeosborne.au/2026/06/beyond-json-tool-calls-mastering-smarter-agents-with-smolagents/'>smolagents</a>",
+            result);
+        Assert.DoesNotContain("lukeos Osborne", result);
+        var fix = Assert.Single(fixes);
+        Assert.False(fix.IsRemoval);
+        Assert.Equal("https://lukeosborne.au/2026/06/beyond-json-tool-calls-mastering-smarter-agents-with-smolagents/", fix.NewHref);
+    }
+
+    [Fact]
+    public void Guard_RepairsWrongTld()
+    {
+        // Real failure: the model changed the brief link's .co TLD to .com.
+        const string body = "<p><a href='https://huggingface.com/meituan-longcat/LongCat-2.0'>LongCat-2.0</a></p>";
+
+        string result = LinkIntegrity.Guard(body, Known, out var fixes);
+
+        Assert.Contains("<a href='https://huggingface.co/meituan-longcat/LongCat-2.0'>", result);
+        Assert.Single(fixes);
+    }
+
+    [Fact]
+    public void Guard_CanonicalisesSchemeWwwAndTrailingSlashVariants()
+    {
+        const string body = "<p><a href=\"http://www.huggingface.co/meituan-longcat/LongCat-2.0/\">x</a></p>";
+
+        string result = LinkIntegrity.Guard(body, Known, out var fixes);
+
+        Assert.Contains("href=\"https://huggingface.co/meituan-longcat/LongCat-2.0\"", result);
+        Assert.Single(fixes);
+    }
+
+    [Fact]
+    public void Guard_LeavesExactKnownLinkUnchanged()
+    {
+        const string body = "<p><a href='https://huggingface.co/meituan-longcat/LongCat-2.0'>x</a></p>";
+
+        string result = LinkIntegrity.Guard(body, Known, out var fixes);
+
+        Assert.Equal(body, result);
+        Assert.Empty(fixes);
+    }
+
+    [Fact]
+    public void Guard_UnwrapsMalformedUnknownLink()
+    {
+        const string body = "<p>Read <a href='https://not a real url/foo'>this guide</a> now.</p>";
+
+        string result = LinkIntegrity.Guard(body, Known, out var fixes);
+
+        Assert.Equal("<p>Read this guide now.</p>", result);
+        var fix = Assert.Single(fixes);
+        Assert.True(fix.IsRemoval);
+        Assert.Null(fix.NewHref);
+    }
+
+    [Fact]
+    public void Guard_LeavesWellFormedUnknownExternalLinkAlone()
+    {
+        const string body = "<p><a href='https://github.com/some/other/repo'>repo</a></p>";
+
+        string result = LinkIntegrity.Guard(body, Known, out var fixes);
+
+        Assert.Equal(body, result);
+        Assert.Empty(fixes);
+    }
+
+    [Theory]
+    [InlineData("<p><a href='/relative/path'>x</a></p>")]
+    [InlineData("<p><a href='#section'>x</a></p>")]
+    [InlineData("<p><a href='mailto:a@b.com'>x</a></p>")]
+    public void Guard_IgnoresNonWebLinks(string body)
+    {
+        string result = LinkIntegrity.Guard(body, Known, out var fixes);
+        Assert.Equal(body, result);
+        Assert.Empty(fixes);
+    }
+
+    [Fact]
+    public void Guard_DoesNotRepairDifferentHostSharingShortPath()
+    {
+        // A distinct, well-formed host that merely shares a short path must NOT be rewritten.
+        var known = new[] { "https://github.com/x" };
+        const string body = "<p><a href='https://gitlab.example/x'>x</a></p>";
+
+        string result = LinkIntegrity.Guard(body, known, out var fixes);
+
+        Assert.Equal(body, result);
+        Assert.Empty(fixes);
+    }
+
+    [Fact]
+    public void Guard_RepairedBriefLinkIsNotDuplicatedBySourcesBackstop()
+    {
+        // End-to-end: repair a corrupted brief link, then the Sources backstop sees it as present.
+        var brief = new[] { "https://huggingface.co/meituan-longcat/LongCat-2.0" };
+        const string body = "<p><a href='https://huggingface.com/meituan-longcat/LongCat-2.0'>x</a></p>";
+
+        string guarded = LinkIntegrity.Guard(body, brief, out _);
+        string ensured = BriefLinks.EnsureLinksPresent(guarded, brief);
+
+        Assert.DoesNotContain("<h2>Sources</h2>", ensured);
+    }
+
+    [Fact]
+    public void Guard_EmptyBody_ReturnsEmptyNoFixes()
+    {
+        Assert.Equal(string.Empty, LinkIntegrity.Guard(null, Known, out var fixes));
+        Assert.Empty(fixes);
+    }
+}
+
 public class EditorReviewerTests
 {
     private static BlogPostResult Draft() => new()

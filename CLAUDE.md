@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (259 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (287 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -40,7 +40,7 @@ Llm/         ILlmClient + provider clients + LoggingLlmClient + ChatModels/Anthr
 Prompts/     blog-post-prompt.json, image-relevance-prompt.json, editor-reviewer-prompt.json,
              tag-to-blog-post-body-prompt.json, PromptLoader (copied to output)
 BlogPost/    BlogPostGenerator, BlogPostResult (+ ImageTheme/ImageThemeListConverter),
-             BlogPostParser, EditorReviewer
+             BlogPostParser, EditorReviewer, BriefLinks, ExternalLinks, LinkIntegrity
 Images/      ImageLibraryScanner, ImageRelevanceSelector, ImagePreparer, PerceptualHash,
              TagBasedImageSelector, TagMatcher, CandidateSet, ImageTagReader
 Wordpress/   ISshRunner, SshNetRunner, WpCliCommands, WpCliPublisher,
@@ -150,6 +150,21 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   which boosts fill-slot ordering (`DefaultUserTagSelectionWeight`) and, more strongly, the featured blend
   `visionScore + DefaultUserTagFeaturedWeight × affinity`. Theme coverage stays purely vision-driven, and
   an absent affinity map reproduces the pure-vision behaviour exactly.
+- **Link handling / URL integrity** (`BlogPost/`): three pure, unit-tested post-processors run over the
+  body in `Program.cs` right after generation, in this order. (1) `LinkIntegrity.Guard` validates every
+  `<a href>` against the URLs we actually gave the model — the existing-post list (internal links) plus the
+  brief's source links — and repairs the corruption models introduce into URLs they were handed verbatim
+  (observed: a host mangled with injected/duplicated chars like `lukeos Osborne.au`, and a wrong TLD like
+  `huggingface.com` for `.co`). An href is repaired when it exactly matches a known URL modulo
+  scheme/`www.`/case/trailing-slash (canonicalised to the known-good string), **or** its *path* equals a
+  known URL's path and the hosts are a near-match (Levenshtein within tolerance) — exact path match on a
+  distinctive blog path is the strong signal it's the same link. A malformed href (embedded whitespace,
+  unparseable, no host) matching nothing is **unwrapped** to plain text (dead link the model invented); a
+  well-formed unknown external link is left alone. Only http(s) links are touched (relative/#anchor/mailto
+  left as-is). (2) `BriefLinks.EnsureLinksPresent` appends any dropped brief URL under a `<h2>Sources</h2>`
+  list — running *after* the guard means a repaired inline brief link is seen as present and not
+  duplicated. (3) `ExternalLinks.MarkExternalLinksNewTab` adds `target='_blank' rel='noopener noreferrer'`
+  to off-site links (internal = the blog's own domain, derived from `wordPressFolder`).
 - **Multi-line brief input**: the interactive `Prompt` in `Program.cs` reads stdin until **EOF (Ctrl-D)**,
   not a single line, so pasted multi-line briefs (tables, code) are captured whole.
 - **Terminal UI + logging** (`Ui/`): all pipeline output goes through the `Ui` facade (Spectre.Console —
@@ -194,9 +209,10 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   (`0600` on Unix). Never commit `ssh-config.key`, `id_rsa`, `*.pem`, `*.key` — they are gitignored.
   Set secrets via the `--set-key-password` / `--set-ssh-password` verbs, not by hand.
 - **Testability**: `ISshRunner` and `ILlmClient` are interfaces with fakes in `Tests/Fakes.cs`.
-  `WpCliPublisher`, `ImageRelevanceSelector`, `EditorReviewer`, `BlogPostParser`, `PerceptualHash`, and
+  `WpCliPublisher`, `ImageRelevanceSelector`, `EditorReviewer`, `BlogPostParser`, `PerceptualHash`,
+  `LinkIntegrity`, and
   `FeaturedHistoryFetcher` expose pure helpers (`Select`, `ParseScore`/`ParseScores`, `BuildPrompt`,
-  `RepairJson`, `ParseReview`, `Compute`/`HammingDistance`/`IsWithinAny`, `ParsePostIds`, command builders)
+  `RepairJson`, `ParseReview`, `Compute`/`HammingDistance`/`IsWithinAny`, `ParsePostIds`, `Guard`, command builders)
   so logic can be tested without a server or model. `FeaturedHistoryFetcher` takes the image download as a
   `Func<string, Stream?>` so its orchestration is exercised with a fake runner + canned image bytes.
 - **Nested test project gotcha**: because `WPAIPoster.Tests/` is inside the main project dir, the main
