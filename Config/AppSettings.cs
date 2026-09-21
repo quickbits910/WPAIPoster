@@ -36,6 +36,14 @@ public sealed class AppSettings
     [JsonPropertyName("visionModel")]
     public string? VisionModel { get; set; }
 
+    /// <summary>
+    /// Delay around the first vision request when <see cref="VisionModel"/> differs from <see cref="Model"/>.
+    /// Also used for one retry if that first vision request fails. Null uses the default; values below zero
+    /// are treated as zero.
+    /// </summary>
+    [JsonPropertyName("visionModelSwitchDelaySeconds")]
+    public int? VisionModelSwitchDelaySeconds { get; set; }
+
     /// <summary>Base URL override for the provider endpoint.</summary>
     [JsonPropertyName("baseUrl")]
     public string? BaseUrl { get; set; }

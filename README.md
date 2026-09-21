@@ -54,6 +54,7 @@ ask to publish.
   "provider": "lmstudio",
   "model": "google/gemma-4-26b-a4b",
   "visionModel": "google/gemma-4-26b-a4b",
+  "visionModelSwitchDelaySeconds": 30,
   "baseUrl": "http://127.0.0.1:1234",
   "apiKey": null,
   "imageLibrary": "/path/to/your/images/",
@@ -85,6 +86,7 @@ ask to publish.
 | `provider` | `lmstudio` (default), `ollama`, `openai`, `openai-compatible`, or `anthropic`. |
 | `model` | Model used to write the post (and the tag-based image pre-selection). |
 | `visionModel` | Vision-capable model used to score images (falls back to `model`). |
+| `visionModelSwitchDelaySeconds` | Delay around the first vision request when `visionModel` differs from `model`; also used for one retry if that first request fails while the local vision model is loading (default `30`; set `0` to disable). |
 | `baseUrl` | Endpoint for local/compatible providers. |
 | `apiKey` | Cloud key. Leave `null` and use `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars instead. |
 | `imageLibrary` | Local folder scanned for images. |

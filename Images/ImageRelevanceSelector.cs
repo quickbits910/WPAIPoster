@@ -50,7 +50,8 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         IReadOnlyDictionary<string, double>? userTagAffinity = null,
         double selectionWeight = AppLimits.DefaultUserTagSelectionWeight,
         double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight,
-        double coverageFloor = AppLimits.DefaultThemeCoverageFloor)
+        double coverageFloor = AppLimits.DefaultThemeCoverageFloor,
+        TimeSpan? firstVisionRetryDelay = null)
     {
         // With no themes, fall back to a single combined pseudo-theme (legacy single-score behaviour).
         IReadOnlyList<ImageTheme> themes = imageThemes.Count > 0
@@ -63,6 +64,23 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
 
         var scored = new List<ScoredImage>();
         int total = candidatePaths.Count;
+        bool isFirstVisionAttempt = true;
+
+        async Task<string?> SendVisionAsync(string promptText, IReadOnlyList<(string Base64, string MimeType)> images)
+        {
+            bool canRetry = isFirstVisionAttempt && firstVisionRetryDelay.GetValueOrDefault() > TimeSpan.Zero;
+            isFirstVisionAttempt = false;
+
+            try
+            {
+                return await visionClient.SendAsync(promptText, images);
+            }
+            catch when (canRetry)
+            {
+                await Task.Delay(firstVisionRetryDelay!.Value);
+                return await visionClient.SendAsync(promptText, images);
+            }
+        }
 
         for (int i = 0; i < total; i++)
         {
@@ -72,7 +90,7 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             try
             {
                 var (b64, mime) = ImagePreparer.MakeVisionThumbnailBase64(path);
-                string? reply = await visionClient.SendAsync(prompt, new[] { (b64, mime) });
+                string? reply = await SendVisionAsync(prompt, new[] { (b64, mime) });
                 double[] scores = ParseScores(reply, themeCount);
                 ulong hash = PerceptualHash.Compute(path);
                 scored.Add(new ScoredImage(path, scores, hash));

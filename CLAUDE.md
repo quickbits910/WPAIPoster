@@ -250,7 +250,8 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 
 ## Configuration files
 
-- `app.settings.json` — `provider`, `model`, `visionModel`, `baseUrl`, `apiKey`, `imageLibrary`,
+- `app.settings.json` — `provider`, `model`, `visionModel`, `visionModelSwitchDelaySeconds`,
+  `baseUrl`, `apiKey`, `imageLibrary`,
   `autoPublish`, `wordPressFolder`, `maxImagesToScore`, `imagesPerPost`, `maxImagesToIndex`, `tagPrefix`,
   `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `themeCoverageFloor`,
   `avoidRecentFeaturedImages`,

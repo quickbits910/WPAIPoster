@@ -4,6 +4,7 @@ using SixLabors.ImageSharp.Processing;
 using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
 using WPAIPoster.Images;
+using WPAIPoster.Llm;
 
 namespace WPAIPoster.Tests;
 
@@ -92,6 +93,49 @@ public class ImageRelevanceSelectorTests
     // Theme names matching a score vector by index (t0, t1, ...).
     private static string[] Themes(int n) => Enumerable.Range(0, n).Select(i => "t" + i).ToArray();
 
+    [Fact]
+    public async Task SelectAsync_RetriesFirstVisionFailureAfterConfiguredDelay()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"WPAIRetry_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        string path = Path.Combine(tempDir, "candidate.png");
+
+        try
+        {
+            using (var img = new Image<Rgba32>(16, 16))
+            {
+                img.ProcessPixelRows(accessor =>
+                {
+                    for (int y = 0; y < accessor.Height; y++)
+                    {
+                        Span<Rgba32> row = accessor.GetRowSpan(y);
+                        row.Fill(new Rgba32(20, 120, 200, 255));
+                    }
+                });
+                img.SaveAsPng(path);
+            }
+
+            var llm = new FailOnceLlmClient("[0.9]");
+            var selector = ImageRelevanceSelector.Create(llm);
+
+            var selected = await selector.SelectAsync(
+                new[] { path },
+                new[] { new ImageTheme("blue image", "a blue test image") },
+                postTitle: "Test",
+                postSummary: "Test",
+                count: 1,
+                firstVisionRetryDelay: TimeSpan.FromMilliseconds(1));
+
+            Assert.Single(selected);
+            Assert.Equal(2, llm.ImageCallCount);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("0.85", 0.85)]
     [InlineData("Relevance: 0.4", 0.4)]
@@ -104,6 +148,32 @@ public class ImageRelevanceSelectorTests
     public void ParseScore_ExtractsAndClamps(string? reply, double expected)
     {
         Assert.Equal(expected, ImageRelevanceSelector.ParseScore(reply), 3);
+    }
+
+    private sealed class FailOnceLlmClient(string reply) : ILlmClient
+    {
+        private bool _failed;
+
+        public int ImageCallCount { get; private set; }
+
+        public Task<string?> SendAsync(string promptText, string? base64Image, string? mimeType)
+            => SendAsync(promptText, base64Image is null || mimeType is null
+                ? Array.Empty<(string, string)>()
+                : new[] { (base64Image, mimeType) });
+
+        public Task<string?> SendAsync(string promptText, IReadOnlyList<(string Base64, string MimeType)> images)
+        {
+            if (images.Count > 0)
+                ImageCallCount++;
+
+            if (!_failed)
+            {
+                _failed = true;
+                throw new HttpRequestException("model is still loading");
+            }
+
+            return Task.FromResult<string?>(reply);
+        }
     }
 
     [Fact]

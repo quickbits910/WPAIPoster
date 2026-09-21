@@ -33,6 +33,7 @@ public class AppSettingsTests : IDisposable
               "provider": "anthropic",
               "model": "claude-opus-4-8",
               "visionModel": "claude-opus-4-8",
+              "visionModelSwitchDelaySeconds": 30,
               "baseUrl": "https://example.com",
               "apiKey": "sk-test",
               "imageLibrary": "/images",
@@ -49,6 +50,7 @@ public class AppSettingsTests : IDisposable
         Assert.Equal("anthropic", s.Provider);
         Assert.Equal("claude-opus-4-8", s.Model);
         Assert.Equal("claude-opus-4-8", s.VisionModel);
+        Assert.Equal(30, s.VisionModelSwitchDelaySeconds);
         Assert.Equal("https://example.com", s.BaseUrl);
         Assert.Equal("sk-test", s.ApiKey);
         Assert.Equal("/images", s.ImageLibrary);

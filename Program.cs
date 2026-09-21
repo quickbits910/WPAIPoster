@@ -92,10 +92,17 @@ int tagCandidateLimit = settings.TagCandidateLimit ?? AppLimits.DefaultTagCandid
 int imageDedupThreshold = settings.ImageDedupThreshold ?? AppLimits.DefaultImageDedupThreshold;
 double minImageRelevance = settings.MinImageRelevance ?? AppLimits.DefaultMinImageRelevance;
 double themeCoverageFloor = settings.ThemeCoverageFloor ?? AppLimits.DefaultThemeCoverageFloor;
+int visionModelSwitchDelaySeconds = Math.Max(0,
+    settings.VisionModelSwitchDelaySeconds ?? AppLimits.DefaultVisionModelSwitchDelaySeconds);
 bool avoidRecentFeatured = settings.AvoidRecentFeaturedImages ?? AppLimits.DefaultAvoidRecentFeaturedImages;
 int recentFeaturedHistoryCount = settings.RecentFeaturedHistoryCount ?? AppLimits.DefaultRecentFeaturedHistoryCount;
 int recentFeaturedThreshold = settings.RecentFeaturedHammingThreshold ?? AppLimits.DefaultRecentFeaturedHammingThreshold;
 string outputFolder = settings.OutputFolder ?? AppLimits.DefaultOutputFolder;
+string model = settings.Model!;
+string? configuredVisionModel = settings.VisionModel;
+string visionModel = string.IsNullOrWhiteSpace(configuredVisionModel) ? model : configuredVisionModel;
+bool usesSeparateVisionModel = !string.IsNullOrWhiteSpace(configuredVisionModel)
+    && !string.Equals(model, configuredVisionModel, StringComparison.OrdinalIgnoreCase);
 
 // ---- Logging + UI ---------------------------------------------------------
 
@@ -104,15 +111,15 @@ var ui = new Ui(AnsiConsole.Console, logger, verbosity);
 
 ui.Rule("WPAIPoster");
 ui.Detail($"Brief: {brief}");
-ui.Detail($"Provider: {settings.Provider}, model: {settings.Model}, vision: {settings.VisionModel ?? settings.Model}");
+ui.Detail($"Provider: {settings.Provider}, model: {model}, vision: {visionModel}");
 ui.Detail($"Publish: {publish}, images: {(noImages ? "off" : imagesPerPost.ToString())}, output: {outputFolder}");
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
 ILlmClient textClient = new LoggingLlmClient(
-    LlmClientFactory.Create(http, settings.Provider, settings.Model, settings.BaseUrl, settings.ApiKey),
+    LlmClientFactory.Create(http, settings.Provider, model, settings.BaseUrl, settings.ApiKey),
     logger, "text");
 ILlmClient visionClient = new LoggingLlmClient(
-    LlmClientFactory.Create(http, settings.Provider, settings.VisionModel ?? settings.Model, settings.BaseUrl, settings.ApiKey),
+    LlmClientFactory.Create(http, settings.Provider, visionModel, settings.BaseUrl, settings.ApiKey),
     logger, "vision");
 
 var tempImages = new List<string>();
@@ -258,7 +265,17 @@ try
                     : 0.0);
         }
 
+        if (usesSeparateVisionModel && visionModelSwitchDelaySeconds > 0)
+        {
+            await ui.StatusAsync(
+                $"Waiting {visionModelSwitchDelaySeconds}s for vision model '{visionModel}' to load",
+                () => Task.Delay(TimeSpan.FromSeconds(visionModelSwitchDelaySeconds)));
+        }
+
         var selector = ImageRelevanceSelector.Create(visionClient);
+        TimeSpan? firstVisionRetryDelay = usesSeparateVisionModel && visionModelSwitchDelaySeconds > 0
+            ? TimeSpan.FromSeconds(visionModelSwitchDelaySeconds)
+            : null;
         var selected = await ui.ProgressAsync("Vision-scoring", candidates.Count, sink =>
             selector.SelectAsync(
                 candidates, post.ImageThemes, post.H1, post.MetaDescription,
@@ -270,7 +287,8 @@ try
                 recentFeaturedHashes: recentFeatured,
                 recentFeaturedThreshold: recentFeaturedThreshold,
                 userTagAffinity: userTagAffinity,
-                coverageFloor: themeCoverageFloor));
+                coverageFloor: themeCoverageFloor,
+                firstVisionRetryDelay: firstVisionRetryDelay));
 
         ui.Success($"Selected {selected.Count} image(s)");
         foreach (SelectedImage img in selected)

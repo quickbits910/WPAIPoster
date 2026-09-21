@@ -81,6 +81,12 @@ public static class AppLimits
     public const double DefaultThemeCoverageFloor = 0.4;
 
     /// <summary>
+    /// Default delay around the first vision request when <c>visionModel</c> differs from <c>model</c>.
+    /// LM Studio can need a few seconds to unload the text model and load the vision model.
+    /// </summary>
+    public const int DefaultVisionModelSwitchDelaySeconds = 30;
+
+    /// <summary>
     /// When true, the featured image is steered away from any image matching a recent post's featured
     /// image (by perceptual hash), so consecutive posts don't reuse the same hero image.
     /// </summary>
