@@ -17,6 +17,28 @@ public sealed record SelectedImage(string Path, double Score, bool IsFeatured, s
 /// <summary>A scored candidate: its per-theme relevance scores and perceptual hash.</summary>
 public sealed record ScoredImage(string Path, IReadOnlyList<double> Scores, ulong Hash);
 
+/// <summary>How a single candidate fared during vision scoring.</summary>
+public enum ScoringOutcome
+{
+    /// <summary>The vision model replied and the image was scored.</summary>
+    Scored,
+    /// <summary>The local image file couldn't be loaded/decoded (thumbnail or hash failed).</summary>
+    Unreadable,
+    /// <summary>The vision request itself failed (HTTP error, timeout, server down).</summary>
+    RequestFailed,
+    /// <summary>Not attempted: scoring stopped after repeated request failures.</summary>
+    NotAttempted
+}
+
+/// <summary>
+/// Per-candidate progress report from <see cref="ImageRelevanceSelector.SelectAsync"/>. <see cref="Score"/>
+/// is the best theme score (<see cref="double.NaN"/> unless <see cref="Outcome"/> is
+/// <see cref="ScoringOutcome.Scored"/>); <see cref="Error"/> describes why a candidate wasn't scored.
+/// </summary>
+public sealed record ScoringProgress(
+    int Index, int Total, string FileName, ScoringOutcome Outcome,
+    double Score = double.NaN, string? Theme = null, string? Error = null);
+
 /// <summary>
 /// Scores candidate library images against each of the post's themes using a vision model, then selects
 /// a diverse set: the best <em>distinct</em> image for each theme (filling any remaining slots with the
@@ -32,9 +54,11 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
     /// <summary>
     /// Scores each candidate against every theme (one vision call per image), then returns up to
     /// <paramref name="count"/> diverse images via <see cref="Select"/>. Candidates that fail to
-    /// load/score are skipped. <paramref name="onScored"/> is invoked after each image with
-    /// (index, total, fileName, bestThemeScore, bestThemeName); a <see cref="double.NaN"/> score signals
-    /// a skip (and a null theme name).
+    /// load/score are skipped. <paramref name="onScored"/> is invoked once per candidate with a
+    /// <see cref="ScoringProgress"/> that distinguishes an unreadable local file from a failed vision
+    /// request (with the error message). After <paramref name="maxConsecutiveRequestFailures"/> request
+    /// failures in a row the endpoint is treated as down (e.g. the LLM server crashed) and the remaining
+    /// candidates are reported as <see cref="ScoringOutcome.NotAttempted"/> rather than sent.
     /// </summary>
     public async Task<IReadOnlyList<SelectedImage>> SelectAsync(
         IReadOnlyList<string> candidatePaths,
@@ -44,14 +68,15 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         int count,
         int hammingThreshold = AppLimits.DefaultImageDedupThreshold,
         double minRelevance = AppLimits.DefaultMinImageRelevance,
-        Action<int, int, string, double, string?>? onScored = null,
+        Action<ScoringProgress>? onScored = null,
         IReadOnlySet<ulong>? recentFeaturedHashes = null,
         int recentFeaturedThreshold = AppLimits.DefaultRecentFeaturedHammingThreshold,
         IReadOnlyDictionary<string, double>? userTagAffinity = null,
         double selectionWeight = AppLimits.DefaultUserTagSelectionWeight,
         double featuredWeight = AppLimits.DefaultUserTagFeaturedWeight,
         double coverageFloor = AppLimits.DefaultThemeCoverageFloor,
-        TimeSpan? firstVisionRetryDelay = null)
+        TimeSpan? firstVisionRetryDelay = null,
+        int maxConsecutiveRequestFailures = AppLimits.MaxConsecutiveVisionFailures)
     {
         // With no themes, fall back to a single combined pseudo-theme (legacy single-score behaviour).
         IReadOnlyList<ImageTheme> themes = imageThemes.Count > 0
@@ -82,43 +107,81 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             }
         }
 
+        int consecutiveRequestFailures = 0;
+        string? lastRequestError = null;
+
         for (int i = 0; i < total; i++)
         {
             string path = candidatePaths[i];
-            double best = double.NaN;
-            string? bestTheme = null;
+            string fileName = Path.GetFileName(path);
+
+            // The endpoint has failed repeatedly (e.g. the LLM server ran out of memory and died) — stop
+            // hammering it and report the rest as not attempted instead of mislabelling them.
+            if (maxConsecutiveRequestFailures > 0 && consecutiveRequestFailures >= maxConsecutiveRequestFailures)
+            {
+                onScored?.Invoke(new ScoringProgress(i + 1, total, fileName, ScoringOutcome.NotAttempted,
+                    Error: $"stopped after {consecutiveRequestFailures} consecutive vision request failures (last: {lastRequestError})"));
+                continue;
+            }
+
+            // Local prep first, so a bad file is distinguishable from a failed request.
+            string b64, mime;
+            ulong hash;
             try
             {
-                var (b64, mime) = ImagePreparer.MakeVisionThumbnailBase64(path);
-                string? reply = await SendVisionAsync(prompt, new[] { (b64, mime) });
-                double[] scores = ParseScores(reply, themeCount);
-                ulong hash = PerceptualHash.Compute(path);
-                scored.Add(new ScoredImage(path, scores, hash));
-
-                if (scores.Length > 0)
-                {
-                    int bi = 0;
-                    for (int t = 1; t < scores.Length; t++)
-                        if (scores[t] > scores[bi]) bi = t;
-                    best = scores[bi];
-                    bestTheme = subjects[bi];
-                }
-                else
-                {
-                    best = 0;
-                }
+                (b64, mime) = ImagePreparer.MakeVisionThumbnailBase64(path);
+                hash = PerceptualHash.Compute(path);
             }
-            catch
+            catch (Exception ex)
             {
-                // Unreadable/undecodable image — skip it (reported as NaN below).
+                onScored?.Invoke(new ScoringProgress(i + 1, total, fileName, ScoringOutcome.Unreadable,
+                    Error: Describe(ex)));
+                continue;
             }
 
-            onScored?.Invoke(i + 1, total, Path.GetFileName(path), best, bestTheme);
+            string? reply;
+            try
+            {
+                reply = await SendVisionAsync(prompt, new[] { (b64, mime) });
+                consecutiveRequestFailures = 0;
+            }
+            catch (Exception ex)
+            {
+                consecutiveRequestFailures++;
+                lastRequestError = Describe(ex);
+                onScored?.Invoke(new ScoringProgress(i + 1, total, fileName, ScoringOutcome.RequestFailed,
+                    Error: lastRequestError));
+                continue;
+            }
+
+            double[] scores = ParseScores(reply, themeCount);
+            scored.Add(new ScoredImage(path, scores, hash));
+
+            double best = 0;
+            string? bestTheme = null;
+            if (scores.Length > 0)
+            {
+                int bi = 0;
+                for (int t = 1; t < scores.Length; t++)
+                    if (scores[t] > scores[bi]) bi = t;
+                best = scores[bi];
+                bestTheme = subjects[bi];
+            }
+
+            onScored?.Invoke(new ScoringProgress(i + 1, total, fileName, ScoringOutcome.Scored, best, bestTheme));
         }
 
         return Select(scored, subjects, count, hammingThreshold, minRelevance,
             recentFeaturedHashes, recentFeaturedThreshold,
             userTagAffinity, selectionWeight, featuredWeight, coverageFloor);
+    }
+
+    /// <summary>One-line error description (type + message, innermost cause appended) for the run log.</summary>
+    public static string Describe(Exception ex)
+    {
+        string text = $"{ex.GetType().Name}: {ex.Message}";
+        Exception root = ex.GetBaseException();
+        return ReferenceEquals(root, ex) ? text : $"{text} ← {root.GetType().Name}: {root.Message}";
     }
 
     /// <summary>

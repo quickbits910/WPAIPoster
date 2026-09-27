@@ -56,7 +56,7 @@ public sealed class OpenAiCompatibleClient(
 
         var requestBody = new ChatCompletionRequest { Model = model, Messages = messages };
 
-        var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/chat/completions")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/chat/completions")
         {
             Content = JsonContent.Create(requestBody, options: JsonOptions)
         };
@@ -64,8 +64,8 @@ public sealed class OpenAiCompatibleClient(
         if (apiKey is not null)
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-        var response = await httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
+        using var response = await httpClient.SendAsync(request);
+        await LlmHttpErrors.EnsureSuccessAsync(response);
 
         var result = await response.Content.ReadFromJsonAsync<ChatCompletionResponse>();
         return result?.Choices is { Count: > 0 }

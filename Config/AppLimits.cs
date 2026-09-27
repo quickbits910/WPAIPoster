@@ -87,6 +87,12 @@ public static class AppLimits
     public const int DefaultVisionModelSwitchDelaySeconds = 30;
 
     /// <summary>
+    /// Vision requests that may fail in a row before scoring stops and the endpoint is treated as down
+    /// (e.g. LM Studio crashed out of memory), so the remaining candidates aren't sent to a dead server.
+    /// </summary>
+    public const int MaxConsecutiveVisionFailures = 3;
+
+    /// <summary>
     /// When true, the featured image is steered away from any image matching a recent post's featured
     /// image (by perceptual hash), so consecutive posts don't reuse the same hero image.
     /// </summary>

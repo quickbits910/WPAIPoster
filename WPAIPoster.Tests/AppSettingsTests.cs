@@ -89,4 +89,43 @@ public class AppSettingsTests : IDisposable
         Assert.Equal("lmstudio", s.Provider);
         Assert.Equal("gemma", s.Model);
     }
+
+    [Fact]
+    public void Load_VisionModelBaseUrl_Deserializes()
+    {
+        string path = Write("""
+            { "baseUrl": "http://text:1234", "visionModelBaseUrl": "http://vision:1234" }
+            """);
+
+        var s = AppSettings.Load(path);
+
+        Assert.Equal("http://vision:1234", s.VisionModelBaseUrl);
+        Assert.Equal("http://vision:1234", s.EffectiveVisionBaseUrl);
+        Assert.Equal("http://text:1234", s.BaseUrl);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void EffectiveVisionBaseUrl_MissingOrEmpty_FallsBackToBaseUrl(string? visionUrl)
+    {
+        var s = new AppSettings { BaseUrl = "http://text:1234", VisionModelBaseUrl = visionUrl };
+
+        Assert.Equal("http://text:1234", s.EffectiveVisionBaseUrl);
+    }
+
+    [Fact]
+    public void EffectiveVisionBaseUrl_Set_IsTrimmedAndPreferred()
+    {
+        var s = new AppSettings { BaseUrl = "http://text:1234", VisionModelBaseUrl = "  http://vision:1234 " };
+
+        Assert.Equal("http://vision:1234", s.EffectiveVisionBaseUrl);
+    }
+
+    [Fact]
+    public void EffectiveVisionBaseUrl_NeitherSet_IsNull()
+    {
+        Assert.Null(new AppSettings().EffectiveVisionBaseUrl);
+    }
 }

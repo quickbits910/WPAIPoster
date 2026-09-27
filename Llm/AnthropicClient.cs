@@ -59,7 +59,7 @@ public sealed class AnthropicClient(HttpClient httpClient, string model, string 
             }
         };
 
-        var request = new HttpRequestMessage(HttpMethod.Post, MessagesEndpoint)
+        using var request = new HttpRequestMessage(HttpMethod.Post, MessagesEndpoint)
         {
             Content = JsonContent.Create(requestBody, options: JsonOptions)
         };
@@ -67,8 +67,8 @@ public sealed class AnthropicClient(HttpClient httpClient, string model, string 
         request.Headers.Add("x-api-key", apiKey);
         request.Headers.Add("anthropic-version", AnthropicVersion);
 
-        var response = await httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
+        using var response = await httpClient.SendAsync(request);
+        await LlmHttpErrors.EnsureSuccessAsync(response);
 
         var result = await response.Content.ReadFromJsonAsync<AnthropicResponse>();
         return result?.Content.FirstOrDefault(b => b.Type == "text")?.Text;

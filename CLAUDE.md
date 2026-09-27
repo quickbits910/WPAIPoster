@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (303 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (322 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -137,6 +137,14 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   `avoidRecentFeaturedImages` is false. The HTTP download is injected as a `Func<string, Stream?>` so the
   orchestration is unit-testable offline; `ParsePostIds` is a pure helper. The publish path is **unchanged**
   — this reads existing posts, so it works retroactively with no re-publishing.
+- **Vision-scoring failures**: `SelectAsync` reports each candidate via `onScored(ScoringProgress)` with a
+  `ScoringOutcome` — `Unreadable` (local thumbnail/hash failed), `RequestFailed` (the vision HTTP call
+  threw; the exception text is in `Error` and the run log), or `NotAttempted`. After
+  `AppLimits.MaxConsecutiveVisionFailures` (3) request failures in a row the endpoint is treated as down
+  (observed: LM Studio OOM-killed mid-scoring) and the rest are not sent; `Program.cs` warns with the last error (and suppresses the per-theme
+  "no library image matched" warnings, since nothing was judged). The HTTP clients use
+  `LlmHttpErrors.EnsureSuccessAsync` instead of `EnsureSuccessStatusCode` so the exception carries the
+  server's `error.message` (e.g. LM Studio's 400 `Failed to load model …` when the model can't fit in memory).
 - **Editor reviewer**: `EditorReviewer` (prompt `editor-reviewer-prompt.json`) returns
   `{ score, feedback }`; `ParseReview` reuses `BlogPostParser`'s extract/repair and returns an *unscored*
   (`NaN`) review on unparseable replies so it fails safe (never blocks publishing). Gated by
@@ -251,7 +259,8 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 ## Configuration files
 
 - `app.settings.json` — `provider`, `model`, `visionModel`, `visionModelSwitchDelaySeconds`,
-  `baseUrl`, `apiKey`, `imageLibrary`,
+  `baseUrl`, `visionModelBaseUrl` (optional separate endpoint for `visionModel`; missing/empty → `baseUrl`),
+  `apiKey`, `imageLibrary`,
   `autoPublish`, `wordPressFolder`, `maxImagesToScore`, `imagesPerPost`, `maxImagesToIndex`, `tagPrefix`,
   `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `themeCoverageFloor`,
   `avoidRecentFeaturedImages`,

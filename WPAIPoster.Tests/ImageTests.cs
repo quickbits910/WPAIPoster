@@ -150,6 +150,106 @@ public class ImageRelevanceSelectorTests
         Assert.Equal(expected, ImageRelevanceSelector.ParseScore(reply), 3);
     }
 
+    private static string WriteTestPng(string dir, string name, Rgba32 colour)
+    {
+        string path = Path.Combine(dir, name);
+        using var img = new Image<Rgba32>(16, 16);
+        img.ProcessPixelRows(accessor =>
+        {
+            for (int y = 0; y < accessor.Height; y++)
+                accessor.GetRowSpan(y).Fill(colour);
+        });
+        img.SaveAsPng(path);
+        return path;
+    }
+
+    [Fact]
+    public async Task SelectAsync_StopsAfterConsecutiveRequestFailures_AndReportsOutcomes()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"WPAIFail_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var paths = Enumerable.Range(0, 6)
+                .Select(i => WriteTestPng(tempDir, $"c{i}.png", new Rgba32((byte)(i * 40), 50, 50, 255)))
+                .ToArray();
+            var llm = new AlwaysFailLlmClient();
+            var progress = new List<ScoringProgress>();
+
+            var selected = await ImageRelevanceSelector.Create(llm).SelectAsync(
+                paths, new[] { new ImageTheme("x", "x") }, "T", "S", count: 2,
+                onScored: progress.Add, maxConsecutiveRequestFailures: 3);
+
+            Assert.Empty(selected);
+            Assert.Equal(3, llm.CallCount); // stopped sending after the 3rd failure
+            Assert.Equal(6, progress.Count); // every candidate still reported (progress bar completes)
+            Assert.All(progress.Take(3), p =>
+            {
+                Assert.Equal(ScoringOutcome.RequestFailed, p.Outcome);
+                Assert.Contains("Connection refused", p.Error);
+            });
+            Assert.All(progress.Skip(3), p => Assert.Equal(ScoringOutcome.NotAttempted, p.Outcome));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SelectAsync_ReportsUnreadableFileSeparately_WithoutCallingVision()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), $"WPAIBad_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            string bad = Path.Combine(tempDir, "bad.jpg");
+            File.WriteAllText(bad, "not an image");
+            string good = WriteTestPng(tempDir, "good.png", new Rgba32(20, 120, 200, 255));
+            var llm = new FakeLlmClient("[0.9]");
+            var progress = new List<ScoringProgress>();
+
+            var selected = await ImageRelevanceSelector.Create(llm).SelectAsync(
+                new[] { bad, good }, new[] { new ImageTheme("x", "x") }, "T", "S", count: 1,
+                onScored: progress.Add);
+
+            Assert.Equal(1, llm.ImageCallCount);
+            Assert.Equal(ScoringOutcome.Unreadable, progress[0].Outcome);
+            Assert.False(string.IsNullOrEmpty(progress[0].Error));
+            Assert.Equal(ScoringOutcome.Scored, progress[1].Outcome);
+            Assert.Equal(0.9, progress[1].Score, 3);
+            Assert.Equal(good, Assert.Single(selected).Path);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Describe_IncludesTypeMessageAndInnerCause()
+    {
+        var ex = new HttpRequestException("Error while copying content",
+            new IOException("Connection reset by peer"));
+        string text = ImageRelevanceSelector.Describe(ex);
+        Assert.Contains("HttpRequestException: Error while copying content", text);
+        Assert.Contains("IOException: Connection reset by peer", text);
+    }
+
+    private sealed class AlwaysFailLlmClient : ILlmClient
+    {
+        public int CallCount { get; private set; }
+
+        public Task<string?> SendAsync(string promptText, string? base64Image, string? mimeType)
+            => SendAsync(promptText, Array.Empty<(string, string)>());
+
+        public Task<string?> SendAsync(string promptText, IReadOnlyList<(string Base64, string MimeType)> images)
+        {
+            CallCount++;
+            throw new HttpRequestException("Connection refused (127.0.0.1:1234)");
+        }
+    }
+
     private sealed class FailOnceLlmClient(string reply) : ILlmClient
     {
         private bool _failed;

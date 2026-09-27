@@ -48,6 +48,18 @@ public sealed class AppSettings
     [JsonPropertyName("baseUrl")]
     public string? BaseUrl { get; set; }
 
+    /// <summary>
+    /// Optional base URL for the <see cref="VisionModel"/> endpoint, so image scoring can run on a different
+    /// host than the text model. Null/empty falls back to <see cref="BaseUrl"/>.
+    /// </summary>
+    [JsonPropertyName("visionModelBaseUrl")]
+    public string? VisionModelBaseUrl { get; set; }
+
+    /// <summary>The endpoint the vision model uses: <see cref="VisionModelBaseUrl"/> when set, else <see cref="BaseUrl"/>.</summary>
+    [JsonIgnore]
+    public string? EffectiveVisionBaseUrl =>
+        string.IsNullOrWhiteSpace(VisionModelBaseUrl) ? BaseUrl : VisionModelBaseUrl.Trim();
+
     /// <summary>API key. Prefer ANTHROPIC_API_KEY / OPENAI_API_KEY environment variables over storing here.</summary>
     [JsonPropertyName("apiKey")]
     public string? ApiKey { get; set; }

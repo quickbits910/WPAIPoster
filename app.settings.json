@@ -1,13 +1,15 @@
 {
   "provider": "lmstudio",
   "model": "google/gemma-4-26b-a4b",
-  "visionModel": "qwen/gemma-4-26b-a4b",
-  "baseUrl": "http://127.0.0.1:1234",
+  "baseUrl": "http://192.168.1.28:1234",
+  "visionModel": "google/gemma-4-12b-qat",
+  "visionModelSwitchDelaySeconds": 0,
+  "visionModelBaseUrl": "http://127.0.0.1:1234",
   "apiKey": null,
   "imageLibrary": "/home/luke/Pictures/ImageTagging/Tagged/",
   "autoPublish": false,
-  "wordPressFolder": "abc.au",
-  "maxImagesToScore": 8,
+  "wordPressFolder": "lukeosborne.au",
+  "maxImagesToScore": 12,
   "imagesPerPost": 4,
   "maxImagesToIndex": 1000,
   "tagPrefix": "AI.",
@@ -16,11 +18,11 @@
   "minImageRelevance": 0.1,
   "themeCoverageFloor": 0.4,
   "defaultCategory": "Blog",
-  "enableEditorReviewer": true,
+  "enableEditorReviewer": false,
   "editorReviewerThreshold": 0.8,
   "outputFolder": "./Output",
   "seoMetaKeys": {
-    "title": "_yoast_wpseo_title",
-    "description": "_yoast_wpseo_metadesc"
+   "title": "_yoast_wpseo_title",
+   "description": "_yoast_wpseo_metadesc"
   }
 }

@@ -112,6 +112,7 @@ var ui = new Ui(AnsiConsole.Console, logger, verbosity);
 ui.Rule("WPAIPoster");
 ui.Detail($"Brief: {brief}");
 ui.Detail($"Provider: {settings.Provider}, model: {model}, vision: {visionModel}");
+ui.Detail($"Endpoint: {settings.BaseUrl ?? "(provider default)"}, vision endpoint: {settings.EffectiveVisionBaseUrl ?? "(provider default)"}");
 ui.Detail($"Publish: {publish}, images: {(noImages ? "off" : imagesPerPost.ToString())}, output: {outputFolder}");
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
@@ -119,7 +120,7 @@ ILlmClient textClient = new LoggingLlmClient(
     LlmClientFactory.Create(http, settings.Provider, model, settings.BaseUrl, settings.ApiKey),
     logger, "text");
 ILlmClient visionClient = new LoggingLlmClient(
-    LlmClientFactory.Create(http, settings.Provider, visionModel, settings.BaseUrl, settings.ApiKey),
+    LlmClientFactory.Create(http, settings.Provider, visionModel, settings.EffectiveVisionBaseUrl, settings.ApiKey),
     logger, "vision");
 
 var tempImages = new List<string>();
@@ -276,19 +277,37 @@ try
         TimeSpan? firstVisionRetryDelay = usesSeparateVisionModel && visionModelSwitchDelaySeconds > 0
             ? TimeSpan.FromSeconds(visionModelSwitchDelaySeconds)
             : null;
+        int requestFailures = 0, notAttempted = 0;
+        string? lastVisionError = null;
         var selected = await ui.ProgressAsync("Vision-scoring", candidates.Count, sink =>
             selector.SelectAsync(
                 candidates, post.ImageThemes, post.H1, post.MetaDescription,
                 imagesPerPost, imageDedupThreshold, minImageRelevance,
-                onScored: (i, total, name, score, theme) => sink(i, total,
-                    double.IsNaN(score)
-                        ? $"{name} — skipped (unreadable)"
-                        : $"{name} — relevance {score:0.00} (best theme: {theme})"),
+                onScored: p =>
+                {
+                    if (p.Outcome == ScoringOutcome.RequestFailed) { requestFailures++; lastVisionError = p.Error; }
+                    if (p.Outcome == ScoringOutcome.NotAttempted) notAttempted++;
+                    sink(p.Index, p.Total, p.Outcome switch
+                    {
+                        ScoringOutcome.Scored => $"{p.FileName} — relevance {p.Score:0.00} (best theme: {p.Theme})",
+                        ScoringOutcome.Unreadable => $"{p.FileName} — skipped (unreadable image: {p.Error})",
+                        ScoringOutcome.RequestFailed => $"{p.FileName} — vision request failed: {p.Error}",
+                        _ => $"{p.FileName} — not scored ({p.Error})",
+                    });
+                },
                 recentFeaturedHashes: recentFeatured,
                 recentFeaturedThreshold: recentFeaturedThreshold,
                 userTagAffinity: userTagAffinity,
                 coverageFloor: themeCoverageFloor,
                 firstVisionRetryDelay: firstVisionRetryDelay));
+
+        bool visionFailed = notAttempted > 0 || (candidates.Count > 0 && requestFailures == candidates.Count);
+        if (visionFailed)
+            ui.Warn($"Vision scoring failed against {settings.EffectiveVisionBaseUrl ?? "(provider default)"} " +
+                    $"(model '{visionModel}': {requestFailures} failed request(s), {notAttempted} image(s) not scored) " +
+                    $"— check the LLM server (e.g. the model can't load / out of memory). Last error: {lastVisionError}");
+        else if (requestFailures > 0)
+            ui.Warn($"{requestFailures} vision request(s) failed. Last error: {lastVisionError}");
 
         ui.Success($"Selected {selected.Count} image(s)");
         foreach (SelectedImage img in selected)
@@ -310,8 +329,10 @@ try
             .Select(img => img.Theme)
             .Where(t => !string.IsNullOrEmpty(t))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Skipped when vision scoring itself failed: the themes weren't judged, so blaming the library
+        // would be misleading (the warning above names the real cause).
         foreach (ImageTheme theme in post.ImageThemes)
-            if (!representedThemes.Contains(theme.Subject))
+            if (!visionFailed && !representedThemes.Contains(theme.Subject))
                 ui.Warn($"No library image matched theme '{theme.Subject}' — add relevant imagery or the theme can't be illustrated.");
     }
 
