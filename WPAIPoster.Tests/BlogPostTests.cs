@@ -4,6 +4,83 @@ namespace WPAIPoster.Tests;
 
 public class BlogPostParserTests
 {
+    // ---- Truncated replies (model hit its context/output token limit) ----
+
+    [Fact]
+    public void Parse_TruncatedInsideImageThemes_SalvagesPostAndReportsMissingFields()
+    {
+        // Shape of a real failure: body complete, reply cut off mid-way through the theme list.
+        const string raw = """
+            {
+              "metaTitle": "Atomic Agent v0.6.5",
+              "metaDescription": "Fusion mode explained.",
+              "h1": "Scaling AI Workflows",
+              "bodyHtml": "<p>Body with a {\"ordered\":true} attr and <a href='https://x.io'>link</a>.</p>",
+              "imageThemes": [
+                {
+                  "subject": "server",
+                  "description": "Data center server racks"
+                },
+                {
+                  "subject": "processor",
+            """;
+
+        BlogPostResult post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("Atomic Agent v0.6.5", post.MetaTitle);
+        Assert.Contains("{\"ordered\":true}", post.BodyHtml);
+        Assert.Equal(new[] { "server", "processor" }, post.ImageThemes.Select(t => t.Subject));
+        Assert.NotNull(post.TruncatedMissingFields);
+        Assert.Contains("tags", post.TruncatedMissingFields!);
+        Assert.Contains("categories", post.TruncatedMissingFields!);
+        Assert.DoesNotContain("imageThemes", post.TruncatedMissingFields!);
+    }
+
+    [Fact]
+    public void Parse_TruncatedMidString_DropsThePartialValue()
+    {
+        const string raw = """
+            {"h1": "Title", "bodyHtml": "<p>Done.</p>", "cta": "Subscribe to the newsl
+            """;
+
+        BlogPostResult post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("<p>Done.</p>", post.BodyHtml);
+        Assert.Equal(string.Empty, post.Cta); // half-written value is dropped, not guessed at
+        Assert.Contains("cta", post.TruncatedMissingFields!);
+    }
+
+    [Fact]
+    public void Parse_TruncatedInsideBody_ThrowsClearError()
+    {
+        const string raw = """
+            {"h1": "Title", "bodyHtml": "<p>This body never fini
+            """;
+
+        var ex = Assert.Throws<FormatException>(() => BlogPostParser.Parse(raw));
+        Assert.Contains("cut off before the post body was complete", ex.Message);
+        Assert.Contains("context", ex.Message);
+    }
+
+    [Fact]
+    public void Parse_TruncatedInFencedBlock_Salvages()
+    {
+        const string raw = "```json\n{\"h1\": \"T\", \"bodyHtml\": \"<p>B</p>\", \"tags\": [\"a\", \"b";
+
+        BlogPostResult post = BlogPostParser.Parse(raw);
+
+        Assert.Equal("<p>B</p>", post.BodyHtml);
+        Assert.Equal(new[] { "a" }, post.Tags);
+    }
+
+    [Fact]
+    public void Parse_CompleteReply_IsNotMarkedTruncated()
+    {
+        BlogPostResult post = BlogPostParser.Parse("""{"h1": "T", "bodyHtml": "<p>B</p>", "tags": ["a"]}""");
+
+        Assert.Null(post.TruncatedMissingFields);
+    }
+
     private const string Valid = """
         {
           "metaTitle": "Fast Sites",
@@ -698,6 +775,26 @@ public class EditorReviewerTests
         BodyHtml = "<p>Body content.</p>",
         Cta = "Subscribe.",
     };
+
+    [Fact]
+    public async Task ReviewAsync_RequestFails_ReturnsUnscoredWithError()
+    {
+        var failing = ScriptedLlmClient.Throwing(new HttpRequestException("LLM server returned 400 (Bad Request)"));
+
+        EditorReview review = await new EditorReviewer(failing, "{BODY}").ReviewAsync("brief", Draft());
+
+        Assert.True(review.IsUnscored);
+        Assert.Contains("LLM server returned 400", review.RequestError);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_NonRetryableError_Propagates()
+    {
+        var failing = ScriptedLlmClient.Throwing(new InvalidOperationException("bug"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new EditorReviewer(failing, "{BODY}").ReviewAsync("brief", Draft()));
+    }
 
     [Fact]
     public void BuildPrompt_SubstitutesAllTokens()

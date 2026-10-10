@@ -148,4 +148,12 @@ public sealed class BlogPostResult
     /// <summary>Post categories (WordPress <c>category</c> terms). Defaults to the configured default when empty.</summary>
     [JsonPropertyName("categories")]
     public List<string> Categories { get; set; } = new();
+
+    /// <summary>
+    /// Set by <see cref="BlogPostParser"/> when the model's reply was cut off mid-envelope (it hit its
+    /// context/output token limit) and the post was salvaged from the complete part: the envelope fields
+    /// that came back empty as a result. Null when the reply was complete.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? TruncatedMissingFields { get; set; }
 }

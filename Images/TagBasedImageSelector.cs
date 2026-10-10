@@ -60,7 +60,15 @@ public sealed class TagBasedImageSelector(ILlmClient client, string promptTempla
             return Array.Empty<string>();
 
         string prompt = BuildPrompt(promptTemplate, post, themes, union, perTheme);
-        string? reply = await client.SendAsync(prompt, null, null);
+        string? reply;
+        try
+        {
+            reply = await client.SendAsync(prompt, null, null);
+        }
+        catch (Exception ex) when (ResilientLlmClient.IsRetryable(ex))
+        {
+            reply = null; // endpoint down after retries — use the per-theme code ranking below
+        }
 
         IReadOnlyList<IReadOnlyList<int>> byTheme = ParseSelectedByTheme(reply, themes.Count, union.Count);
 

@@ -93,6 +93,22 @@ public static class AppLimits
     public const int MaxConsecutiveVisionFailures = 3;
 
     /// <summary>
+    /// Attempts an LLM request gets (the first try plus retries) before the run pauses for the user to fix
+    /// the endpoint (see <c>ResilientLlmClient</c>).
+    /// </summary>
+    public const int LlmRetryAttempts = 3;
+
+    /// <summary>Delay before each LLM retry (1st retry, 2nd retry, …; the last entry repeats).</summary>
+    public static readonly IReadOnlyList<TimeSpan> LlmRetryBackoff =
+        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)];
+
+    /// <summary>
+    /// Default pause (seconds) after an LLM endpoint exhausts its retries, giving the user time to fix it
+    /// (e.g. load the model in LM Studio) before one final attempt. Zero/negative disables the pause.
+    /// </summary>
+    public const int DefaultLlmRecoveryWaitSeconds = 120;
+
+    /// <summary>
     /// When true, the featured image is steered away from any image matching a recent post's featured
     /// image (by perceptual hash), so consecutive posts don't reuse the same hero image.
     /// </summary>

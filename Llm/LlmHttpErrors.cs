@@ -70,4 +70,12 @@ public static class LlmHttpErrors
         string trimmed = body.Trim();
         return trimmed.Length <= MaxBodyExcerpt ? trimmed : trimmed[..MaxBodyExcerpt] + "…";
     }
+
+    /// <summary>One-line error description (type + message, innermost cause appended) for warnings and the run log.</summary>
+    public static string Describe(Exception ex)
+    {
+        string text = $"{ex.GetType().Name}: {ex.Message}";
+        Exception root = ex.GetBaseException();
+        return ReferenceEquals(root, ex) ? text : $"{text} ← {root.GetType().Name}: {root.Message}";
+    }
 }

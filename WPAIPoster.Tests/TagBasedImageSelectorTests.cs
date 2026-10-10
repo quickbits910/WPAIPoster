@@ -241,4 +241,17 @@ public class TagBasedImageSelectorTests
         Assert.Empty(picked);
         Assert.Empty(fake.Prompts); // model not queried when nothing matches
     }
+
+    [Fact]
+    public async Task SelectAsync_RequestFails_FallsBackToPerThemeRanking()
+    {
+        var failing = ScriptedLlmClient.Throwing(new HttpRequestException("Connection refused"));
+
+        var picked = await new TagBasedImageSelector(failing, "{THEMES}\n{TAGGED_IMAGES}")
+            .SelectAsync(MountainCatalog(), MountainPost(), candidateLimit: 10);
+
+        Assert.Equal(1, failing.Calls);
+        Assert.Contains("/a.jpg", picked);
+        Assert.Contains("/b.jpg", picked);
+    }
 }

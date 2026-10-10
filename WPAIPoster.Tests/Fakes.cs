@@ -65,3 +65,29 @@ public sealed class FakeSshRunner : ISshRunner
 
     public void Dispose() { }
 }
+
+/// <summary>
+/// An <see cref="ILlmClient"/> scripted per call: each entry is either an exception to throw or a reply to
+/// return (the last entry repeats once the script runs out). Counts calls.
+/// </summary>
+public sealed class ScriptedLlmClient : ILlmClient
+{
+    private readonly object?[] _script;
+    public int Calls { get; private set; }
+
+    public ScriptedLlmClient(params object?[] script) => _script = script;
+
+    /// <summary>A client whose every call throws <paramref name="ex"/>.</summary>
+    public static ScriptedLlmClient Throwing(Exception ex) => new(ex);
+
+    public Task<string?> SendAsync(string promptText, string? base64Image, string? mimeType) => Next();
+
+    public Task<string?> SendAsync(string promptText, IReadOnlyList<(string Base64, string MimeType)> images) => Next();
+
+    private Task<string?> Next()
+    {
+        object? step = _script.Length == 0 ? null : _script[Math.Min(Calls, _script.Length - 1)];
+        Calls++;
+        return step is Exception ex ? Task.FromException<string?>(ex) : Task.FromResult((string?)step);
+    }
+}

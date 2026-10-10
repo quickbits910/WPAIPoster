@@ -231,7 +231,7 @@ public class ImageRelevanceSelectorTests
     {
         var ex = new HttpRequestException("Error while copying content",
             new IOException("Connection reset by peer"));
-        string text = ImageRelevanceSelector.Describe(ex);
+        string text = LlmHttpErrors.Describe(ex);
         Assert.Contains("HttpRequestException: Error while copying content", text);
         Assert.Contains("IOException: Connection reset by peer", text);
     }

@@ -135,7 +135,7 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             catch (Exception ex)
             {
                 onScored?.Invoke(new ScoringProgress(i + 1, total, fileName, ScoringOutcome.Unreadable,
-                    Error: Describe(ex)));
+                    Error: LlmHttpErrors.Describe(ex)));
                 continue;
             }
 
@@ -148,7 +148,7 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
             catch (Exception ex)
             {
                 consecutiveRequestFailures++;
-                lastRequestError = Describe(ex);
+                lastRequestError = LlmHttpErrors.Describe(ex);
                 onScored?.Invoke(new ScoringProgress(i + 1, total, fileName, ScoringOutcome.RequestFailed,
                     Error: lastRequestError));
                 continue;
@@ -174,14 +174,6 @@ public sealed partial class ImageRelevanceSelector(ILlmClient visionClient, stri
         return Select(scored, subjects, count, hammingThreshold, minRelevance,
             recentFeaturedHashes, recentFeaturedThreshold,
             userTagAffinity, selectionWeight, featuredWeight, coverageFloor);
-    }
-
-    /// <summary>One-line error description (type + message, innermost cause appended) for the run log.</summary>
-    public static string Describe(Exception ex)
-    {
-        string text = $"{ex.GetType().Name}: {ex.Message}";
-        Exception root = ex.GetBaseException();
-        return ReferenceEquals(root, ex) ? text : $"{text} ← {root.GetType().Name}: {root.Message}";
     }
 
     /// <summary>

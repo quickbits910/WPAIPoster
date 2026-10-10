@@ -44,6 +44,23 @@ public sealed class AppSettings
     [JsonPropertyName("visionModelSwitchDelaySeconds")]
     public int? VisionModelSwitchDelaySeconds { get; set; }
 
+    /// <summary>
+    /// Seconds to pause after an LLM endpoint fails <see cref="AppLimits.LlmRetryAttempts"/> times in a row,
+    /// so the user can fix it (load the model, free memory) before one final attempt. Null uses the default
+    /// (120); zero or negative disables the pause (fail after the retries).
+    /// </summary>
+    [JsonPropertyName("llmRecoveryWaitSeconds")]
+    public int? LlmRecoveryWaitSeconds { get; set; }
+
+    /// <summary>The resolved recovery pause: <see cref="TimeSpan.Zero"/> when disabled.</summary>
+    [JsonIgnore]
+    public TimeSpan EffectiveLlmRecoveryWait => LlmRecoveryWaitSeconds switch
+    {
+        null => TimeSpan.FromSeconds(AppLimits.DefaultLlmRecoveryWaitSeconds),
+        <= 0 => TimeSpan.Zero,
+        int s => TimeSpan.FromSeconds(s),
+    };
+
     /// <summary>Base URL override for the provider endpoint.</summary>
     [JsonPropertyName("baseUrl")]
     public string? BaseUrl { get; set; }

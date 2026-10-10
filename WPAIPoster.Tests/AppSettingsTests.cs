@@ -128,4 +128,24 @@ public class AppSettingsTests : IDisposable
     {
         Assert.Null(new AppSettings().EffectiveVisionBaseUrl);
     }
+
+    [Theory]
+    [InlineData(null, 120)]
+    [InlineData(0, 0)]
+    [InlineData(-5, 0)]
+    [InlineData(45, 45)]
+    public void EffectiveLlmRecoveryWait_Resolves(int? configured, int expectedSeconds)
+    {
+        var s = new AppSettings { LlmRecoveryWaitSeconds = configured };
+
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), s.EffectiveLlmRecoveryWait);
+    }
+
+    [Fact]
+    public void Load_LlmRecoveryWaitSeconds_Deserializes()
+    {
+        var s = AppSettings.Load(Write("""{ "llmRecoveryWaitSeconds": 30 }"""));
+
+        Assert.Equal(30, s.LlmRecoveryWaitSeconds);
+    }
 }

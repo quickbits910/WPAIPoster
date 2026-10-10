@@ -29,18 +29,31 @@ public static class BlogPostParser
         if (string.IsNullOrWhiteSpace(raw))
             throw new FormatException("The model returned an empty response.");
 
-        string json = ExtractJsonObject(raw);
+        // A reply cut off before any '}' has no extractable object; leave it to the truncation salvage below.
+        string? json = raw.Contains('}') ? ExtractJsonObject(raw) : null;
 
         // Models frequently emit string values (especially bodyHtml) containing unescaped quotes,
         // newlines, or control chars, which are invalid JSON. Try the response as-is first, then
         // fall back to a repaired copy that re-escapes those characters.
-        BlogPostResult result =
-            TryDeserialize(json, out BlogPostResult? parsed, out JsonException? firstError) && parsed is not null
-                ? parsed
-                : TryDeserialize(RepairJson(json), out BlogPostResult? repaired, out _) && repaired is not null
-                    ? repaired
-                    : throw new FormatException(
-                        $"Could not parse the model response as a blog post: {firstError!.Message}", firstError);
+        BlogPostResult? result = null;
+        JsonException? firstError = null;
+        if (json is null || !TryDeserialize(json, out result, out firstError) || result is null)
+        {
+            if (json is null || !TryDeserialize(RepairJson(json), out result, out _) || result is null)
+            {
+                // A reply cut off mid-envelope (the model hit its context/output token limit) never closes
+                // the root object, and ExtractJsonObject — slicing to the last '}' — leaves an unbalanced
+                // fragment. Close it at its last complete value and salvage the post if the body finished.
+                string? closed = CloseTruncatedJson(RepairJson(ExtractJsonObject(raw, toEnd: true)));
+                if (closed is not null)
+                    return ParseTruncated(closed, raw);
+
+                if (json is null)
+                    throw new FormatException("No JSON object found in the model response.");
+                throw new FormatException(
+                    $"Could not parse the model response as a blog post: {firstError!.Message}", firstError);
+            }
+        }
 
         if (string.IsNullOrWhiteSpace(result.BodyHtml))
             throw new FormatException(
@@ -48,6 +61,102 @@ public static class BlogPostParser
                 "Raw response:\n" + Truncate(raw!, 2000));
 
         return result;
+    }
+
+    private const string TruncationAdvice =
+        "it likely hit the model's context/output token limit — raise the model's context length " +
+        "(e.g. in LM Studio's load settings) or shorten the brief";
+
+    /// <summary>
+    /// Parses a cut-off reply that <see cref="CloseTruncatedJson"/> closed at its last complete value. The
+    /// post is usable only if the body finished before the cut; otherwise it fails with a clear cause.
+    /// </summary>
+    private static BlogPostResult ParseTruncated(string closedJson, string raw)
+    {
+        if (!TryDeserialize(closedJson, out BlogPostResult? result, out JsonException? error) || result is null)
+            throw new FormatException(
+                $"The model's reply was cut off mid-response ({TruncationAdvice}) and could not be salvaged: " +
+                error?.Message, error);
+
+        if (string.IsNullOrWhiteSpace(result.BodyHtml))
+            throw new FormatException(
+                $"The model's reply was cut off before the post body was complete ({TruncationAdvice}). " +
+                $"Reply length: {raw.Length} chars.");
+
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(result.MetaTitle)) missing.Add("metaTitle");
+        if (string.IsNullOrWhiteSpace(result.MetaDescription)) missing.Add("metaDescription");
+        if (string.IsNullOrWhiteSpace(result.H1)) missing.Add("h1");
+        if (result.ImageThemes.Count == 0) missing.Add("imageThemes");
+        if (result.InternalLinks.Count == 0) missing.Add("internalLinks");
+        if (string.IsNullOrWhiteSpace(result.Cta)) missing.Add("cta");
+        if (result.Tags.Count == 0) missing.Add("tags");
+        if (result.Categories.Count == 0) missing.Add("categories");
+        result.TruncatedMissingFields = missing;
+        return result;
+    }
+
+    /// <summary>
+    /// If <paramref name="json"/> (already string-repaired) ends with containers still open — a reply cut
+    /// off mid-output — returns it cut back to the last <em>complete</em> value and closed with the
+    /// matching brackets; returns null when the JSON is balanced (not truncated). A partial trailing
+    /// value (a half-written string, an unfinished key, a dangling number) is dropped rather than
+    /// guessed at, so a truncated body string is never published half-written.
+    /// </summary>
+    internal static string? CloseTruncatedJson(string json)
+    {
+        var stack = new List<char>();   // open containers: '{' or '['
+        bool inString = false;
+        int safeEnd = -1;               // index just past the last complete value inside a container
+        string safeClosers = string.Empty;
+
+        for (int i = 0; i < json.Length; i++)
+        {
+            char c = json[i];
+            if (inString)
+            {
+                if (c == '\\') i++;
+                else if (c == '"') inString = false;
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"': inString = true; break;
+                case '{' or '[': stack.Add(c); break;
+                case '}' or ']':
+                    if (stack.Count > 0) stack.RemoveAt(stack.Count - 1);
+                    if (stack.Count == 0)
+                        return null; // root closed — complete (anything after it is trailing prose)
+                    MarkSafe(i + 1);
+                    break;
+                case ',':
+                    // A comma always follows a complete value (an array element or a key/value pair).
+                    MarkSafe(i);
+                    break;
+            }
+        }
+
+        if (stack.Count == 0)
+            return null;
+        if (safeEnd < 0)
+            return "{}"; // cut off inside the very first value — nothing complete to keep
+
+        return json[..safeEnd].TrimEnd() + safeClosers;
+
+        void MarkSafe(int end)
+        {
+            safeEnd = end;
+            safeClosers = Closers();
+        }
+
+        string Closers()
+        {
+            var sb = new StringBuilder(stack.Count);
+            for (int k = stack.Count - 1; k >= 0; k--)
+                sb.Append(stack[k] == '{' ? '}' : ']');
+            return sb.ToString();
+        }
     }
 
     private static bool TryDeserialize(string json, out BlogPostResult? result, out JsonException? error)
@@ -375,7 +484,11 @@ public static class BlogPostParser
         => s.Length <= max ? s : s[..max] + "…";
 
     /// <summary>Strips ```json fences and isolates the outermost JSON object in the text.</summary>
-    internal static string ExtractJsonObject(string raw)
+    /// <summary>
+    /// Extracts the JSON object from a reply: from the first <c>{</c> to the last <c>}</c>, or to the end
+    /// of the reply when <paramref name="toEnd"/> (used to inspect a reply that may be cut off).
+    /// </summary>
+    internal static string ExtractJsonObject(string raw, bool toEnd = false)
     {
         string text = raw.Trim();
 
@@ -392,6 +505,8 @@ public static class BlogPostParser
         }
 
         int start = text.IndexOf('{');
+        if (toEnd && start >= 0)
+            return text[start..];
         int end = text.LastIndexOf('}');
         if (start < 0 || end <= start)
             throw new FormatException("No JSON object found in the model response.");

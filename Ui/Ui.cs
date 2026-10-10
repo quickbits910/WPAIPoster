@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Spectre.Console;
 using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
+using WPAIPoster.Llm;
 
 namespace WPAIPoster.Ui;
 
@@ -126,6 +127,78 @@ public sealed class Ui(IAnsiConsole console, RunLogger logger, Verbosity verbosi
                 });
             });
     }
+
+    // ---- LLM outage pause -----------------------------------------------------
+
+    /// <summary>
+    /// Pauses after an LLM endpoint exhausted its retries so the user can fix it. Returns <c>true</c> to make
+    /// a final attempt (Enter pressed, or the window elapsed) or <c>false</c> to skip it (S / Esc). This may
+    /// run inside an active <see cref="StatusAsync{T}"/> spinner or <see cref="ProgressAsync{T}"/> bar, and
+    /// Spectre refuses nested live displays — so it only prints lines (rendered above the live display).
+    /// </summary>
+    public async Task<bool> WaitForRecoveryAsync(LlmOutage outage)
+    {
+        string what = char.ToUpperInvariant(outage.Label[0]) + outage.Label[1..];
+        Warn($"{what} endpoint {outage.Endpoint ?? "(provider default)"} (model {outage.Model}) failed " +
+             $"{outage.Attempts} time(s): {outage.LastError}");
+
+        TimeSpan wait = outage.RecoveryWait;
+        bool interactive = !Console.IsInputRedirected && console.Profile.Capabilities.Interactive;
+        if (!interactive)
+        {
+            Info($"Waiting {FormatWait(wait)} for the LLM server to recover before a final attempt.");
+            await Task.Delay(wait);
+            return true;
+        }
+
+        // Discard keys typed before the pause so a stray Enter doesn't skip the window.
+        while (Console.KeyAvailable)
+            Console.ReadKey(intercept: true);
+
+        // Always shown (even with --quiet): the user needs to know the run is waiting on them.
+        logger.Write("INFO", "Waiting for the user to fix the LLM endpoint");
+        console.MarkupLine(Markup.Escape(
+            $"Fix it (e.g. load the model in LM Studio) — press Enter to retry now, S to skip, " +
+            $"or waiting {FormatWait(wait)} before a final attempt."));
+
+        var deadline = DateTime.UtcNow + wait;
+        int[] reminders = [60, 30, 10];
+        int nextReminder = reminders.TakeWhile(r => r >= wait.TotalSeconds).Count();
+        while (true)
+        {
+            TimeSpan remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                Info("Recovery window elapsed — making a final attempt");
+                return true;
+            }
+
+            if (nextReminder < reminders.Length && remaining.TotalSeconds <= reminders[nextReminder])
+            {
+                console.MarkupLine(Markup.Escape($"  {reminders[nextReminder]}s left before the final attempt…"));
+                nextReminder++;
+            }
+
+            while (Console.KeyAvailable)
+            {
+                ConsoleKey key = Console.ReadKey(intercept: true).Key;
+                if (key == ConsoleKey.Enter)
+                {
+                    Info("Retrying now");
+                    return true;
+                }
+                if (key is ConsoleKey.S or ConsoleKey.Escape)
+                {
+                    Warn($"Skipped the final {outage.Label} attempt");
+                    return false;
+                }
+            }
+
+            await Task.Delay(200);
+        }
+    }
+
+    private static string FormatWait(TimeSpan t) => $"{(int)t.TotalMinutes}:{t.Seconds:00}";
 
     // ---- Rendered post --------------------------------------------------------
 

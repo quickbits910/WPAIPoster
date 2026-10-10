@@ -116,11 +116,18 @@ ui.Detail($"Endpoint: {settings.BaseUrl ?? "(provider default)"}, vision endpoin
 ui.Detail($"Publish: {publish}, images: {(noImages ? "off" : imagesPerPost.ToString())}, output: {outputFolder}");
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
+// Resilient sits inside Logging so each prompt is logged once, not once per retry. Each endpoint gets its
+// own decorator (and so its own "latched down" state): retries, then a pause for the user to fix it.
+var recovery = LlmRecoveryOptions.Default(settings.EffectiveLlmRecoveryWait);
 ILlmClient textClient = new LoggingLlmClient(
-    LlmClientFactory.Create(http, settings.Provider, model, settings.BaseUrl, settings.ApiKey),
+    new ResilientLlmClient(
+        LlmClientFactory.Create(http, settings.Provider, model, settings.BaseUrl, settings.ApiKey),
+        "text", settings.BaseUrl, model, recovery, ui.WaitForRecoveryAsync, ui.Warn),
     logger, "text");
 ILlmClient visionClient = new LoggingLlmClient(
-    LlmClientFactory.Create(http, settings.Provider, visionModel, settings.EffectiveVisionBaseUrl, settings.ApiKey),
+    new ResilientLlmClient(
+        LlmClientFactory.Create(http, settings.Provider, visionModel, settings.EffectiveVisionBaseUrl, settings.ApiKey),
+        "vision", settings.EffectiveVisionBaseUrl, visionModel, recovery, ui.WaitForRecoveryAsync, ui.Warn),
     logger, "vision");
 
 var tempImages = new List<string>();
@@ -151,6 +158,7 @@ try
     BlogPostResult post = await ui.StatusAsync("Generating blog post",
         () => generator.GenerateAsync(brief, existingText, sourceLinks: briefLinks));
     ui.Success("Draft generated");
+    WarnIfTruncated(post);
 
     if (settings.EnableEditorReviewer ?? false)
     {
@@ -164,7 +172,9 @@ try
         {
             if (review.IsUnscored)
             {
-                ui.Warn("Editor review could not be parsed — accepting the draft");
+                ui.Warn(review.RequestError is null
+                    ? "Editor review could not be parsed — accepting the draft"
+                    : $"Editor review request failed ({review.RequestError}) — accepting the draft");
                 break;
             }
 
@@ -180,6 +190,7 @@ try
             ui.Detail($"Editor feedback (cumulative, {feedbackNotes.Count} round(s)):\n{combinedFeedback}");
             post = await ui.StatusAsync("Rewriting blog post",
                 () => generator.GenerateAsync(brief, existingText, combinedFeedback, briefLinks));
+            WarnIfTruncated(post);
             review = await ui.StatusAsync("Editor reviewing rewrite", () => reviewer.ReviewAsync(brief, post));
         }
 
@@ -372,6 +383,17 @@ finally
 }
 
 // ---- Helpers --------------------------------------------------------------
+
+// The model's reply was cut off after the body (context/output token limit) and the post was salvaged:
+// say so, and name what's missing so an empty tag list or generic category isn't a mystery.
+void WarnIfTruncated(BlogPostResult p)
+{
+    if (p.TruncatedMissingFields is not { } missing)
+        return;
+    string lost = missing.Count > 0 ? $"missing: {string.Join(", ", missing)}" : "nothing essential lost";
+    ui.Warn($"The model's reply was cut off after the post body (likely its context/output token limit — " +
+            $"raise the model's context length in LM Studio). Salvaged the post; {lost}.");
+}
 
 // Downloads an image over HTTP into memory for perceptual hashing (recent featured-image lookup).
 // Returns null on any failure so the caller can skip it gracefully.

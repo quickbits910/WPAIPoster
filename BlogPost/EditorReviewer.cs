@@ -16,6 +16,9 @@ public sealed record EditorReview(double Score, string Feedback)
 {
     /// <summary>True when the reviewer reply could not be parsed into a usable score.</summary>
     public bool IsUnscored => double.IsNaN(Score);
+
+    /// <summary>Set when the review request itself failed (rather than the reply being unparseable).</summary>
+    public string? RequestError { get; init; }
 }
 
 /// <summary>
@@ -35,11 +38,22 @@ public sealed partial class EditorReviewer(ILlmClient client, string promptTempl
     public static EditorReviewer Create(ILlmClient client)
         => new(client, PromptLoader.Load(PromptLoader.EditorReviewerPromptFile).GetPromptText());
 
-    /// <summary>Reviews <paramref name="post"/> against the original <paramref name="userInput"/> brief.</summary>
+    /// <summary>
+    /// Reviews <paramref name="post"/> against the original <paramref name="userInput"/> brief. A failed
+    /// request (endpoint down after retries) yields an unscored review — a review never blocks publishing.
+    /// </summary>
     public async Task<EditorReview> ReviewAsync(string userInput, BlogPostResult post)
     {
         string prompt = BuildPrompt(promptTemplate, userInput, post);
-        string? reply = await client.SendAsync(prompt, null, null);
+        string? reply;
+        try
+        {
+            reply = await client.SendAsync(prompt, null, null);
+        }
+        catch (Exception ex) when (ResilientLlmClient.IsRetryable(ex))
+        {
+            return new EditorReview(double.NaN, string.Empty) { RequestError = LlmHttpErrors.Describe(ex) };
+        }
         return ParseReview(reply);
     }
 

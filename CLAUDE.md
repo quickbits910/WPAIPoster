@@ -21,7 +21,7 @@ This project targets `net10.0`. The dotnet SDK lives at `~/.dotnet/dotnet` (not 
 ```bash
 export PATH="$HOME/.dotnet:$PATH"
 dotnet build WPAIPoster.sln          # build everything
-dotnet test  WPAIPoster.sln          # run the xUnit suite (322 tests)
+dotnet test  WPAIPoster.sln          # run the xUnit suite (347 tests)
 dotnet run --project WPAIPoster.csproj -- "your blog brief"   # run the app
 dotnet run --project WPAIPoster.csproj -- --help              # usage
 ```
@@ -36,7 +36,7 @@ WPAIPoster.sln  WPAIPoster.csproj  Program.cs        # entry point + orchestrati
 app.settings.json   ssh-config.json                  # runtime config (copied to output)
 Config/      AppSettings, SshConfig, SshConfigProtector (AES-GCM), AppLimits
 Ui/          RunLogger (per-run log file), Ui (Spectre facade), Verbosity
-Llm/         ILlmClient + provider clients + LoggingLlmClient + ChatModels/AnthropicModels + LlmClientFactory
+Llm/         ILlmClient + provider clients + LoggingLlmClient + ResilientLlmClient + ChatModels/AnthropicModels + LlmClientFactory
 Prompts/     blog-post-prompt.json, image-relevance-prompt.json, editor-reviewer-prompt.json,
              tag-to-blog-post-body-prompt.json, PromptLoader (copied to output)
 BlogPost/    BlogPostGenerator, BlogPostResult (+ ImageTheme/ImageThemeListConverter),
@@ -91,7 +91,14 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   comma collapsed (array element) or replaced by `null` (object value). `RepairJson` is **key/value-aware**
   — it tracks an object-vs-array container stack so a *value* string may legitimately contain a `":`
   sequence (e.g. the Gutenberg block attribute `{"ordered":true}` embedded in body HTML) without the
-  inner quote being mistaken for the string terminator. Tests cover each case.
+  inner quote being mistaken for the string terminator. As a **last resort** (only after both normal
+  passes fail) it **salvages a truncated reply** — the model cut off mid-envelope at its context/output
+  token limit, observed as a reply ending inside `imageThemes`. `CloseTruncatedJson` cuts the (repaired)
+  JSON back to its last *complete* value (a half-written string/key is dropped, never guessed) and closes
+  the open brackets; the post is kept only if `bodyHtml` finished, else a clear "cut off before the post
+  body was complete — raise the context length" error. A salvaged post carries
+  `TruncatedMissingFields` (the fields that came back empty) and `Program.cs` warns naming them. Tests
+  cover each case.
 - **Rich body formatting**: the blog prompt encourages the model to lift posts above plain prose with
   **tables, lists, code, and preformatted blocks** *where they genuinely help* (code blocks only for
   technical topics), each wrapped in its **Gutenberg block comment** (`<!-- wp:table -->`, `<!-- wp:list -->`,
@@ -145,6 +152,20 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
   "no library image matched" warnings, since nothing was judged). The HTTP clients use
   `LlmHttpErrors.EnsureSuccessAsync` instead of `EnsureSuccessStatusCode` so the exception carries the
   server's `error.message` (e.g. LM Studio's 400 `Failed to load model …` when the model can't fit in memory).
+- **LLM outage recovery** (`Llm/ResilientLlmClient.cs`): both clients are wrapped
+  `LoggingLlmClient(ResilientLlmClient(provider))` — Resilient sits *inside* Logging so a prompt is logged
+  once, not per retry. A retryable failure (`IsRetryable`: `HttpRequestException` incl. LM Studio's 400
+  "Failed to load model", or `TaskCanceledException`/`TimeoutException` from the HTTP timeout) is retried
+  up to `AppLimits.LlmRetryAttempts` (3) with `LlmRetryBackoff`; then the run **pauses** via
+  `Ui.WaitForRecoveryAsync` for `llmRecoveryWaitSeconds` (default 120; ≤0 disables the pause) so the user
+  can fix the server — Enter retries now, S/Esc skips — followed by **one final attempt**. If that fails
+  the endpoint is **latched down**: later calls try once with no retries/pause (so vision scoring doesn't
+  pause per image — the selector's stop-after-3 then ends scoring), and any success clears the latch.
+  Each endpoint has its own decorator/latch. The pause only prints lines (never a new Spectre live
+  display) because it can fire inside a `Status` spinner or the `Progress` bar. After the final failure:
+  generation aborts the run; `EditorReviewer.ReviewAsync` returns an unscored review with `RequestError`
+  set (the draft is accepted); `TagBasedImageSelector` falls back to the per-theme code ranking.
+  `LlmHttpErrors.Describe` is the shared one-line exception formatter.
 - **Editor reviewer**: `EditorReviewer` (prompt `editor-reviewer-prompt.json`) returns
   `{ score, feedback }`; `ParseReview` reuses `BlogPostParser`'s extract/repair and returns an *unscored*
   (`NaN`) review on unparseable replies so it fails safe (never blocks publishing). Gated by
@@ -260,6 +281,7 @@ WPAIPoster.Tests/   xUnit project (Fakes.cs holds FakeLlmClient / FakeSshRunner)
 
 - `app.settings.json` — `provider`, `model`, `visionModel`, `visionModelSwitchDelaySeconds`,
   `baseUrl`, `visionModelBaseUrl` (optional separate endpoint for `visionModel`; missing/empty → `baseUrl`),
+  `llmRecoveryWaitSeconds` (pause after an endpoint fails its retries; null → 120, ≤0 → no pause),
   `apiKey`, `imageLibrary`,
   `autoPublish`, `wordPressFolder`, `maxImagesToScore`, `imagesPerPost`, `maxImagesToIndex`, `tagPrefix`,
   `tagCandidateLimit`, `imageDedupThreshold`, `minImageRelevance`, `themeCoverageFloor`,
