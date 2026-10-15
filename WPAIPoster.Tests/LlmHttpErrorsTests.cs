@@ -1,4 +1,5 @@
 using System.Net;
+using WPAIPoster.Config;
 using WPAIPoster.Llm;
 
 namespace WPAIPoster.Tests;
@@ -34,7 +35,7 @@ public class LlmHttpErrorsTests
     [Fact]
     public void BuildMessage_TruncatesLongRawBody()
     {
-        string msg = LlmHttpErrors.BuildMessage(500, "Internal Server Error", new string('x', 2000));
+        string msg = LlmHttpErrors.BuildMessage(500, "Internal Server Error", new string('x', AppLimits.WebResearchMaxChars));
         Assert.EndsWith("…", msg);
         Assert.True(msg.Length < 600);
     }

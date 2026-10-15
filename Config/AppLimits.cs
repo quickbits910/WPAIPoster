@@ -141,4 +141,13 @@ public static class AppLimits
 
     /// <summary>Cap on the LLM response length we will attempt to parse (defensive).</summary>
     public const int MaxLlmResponseLength = 1 * 1024 * 1024; // 1 MB
+
+    /// <summary>Maximum number of brief URLs to fetch through MCP for web-research context.</summary>
+    public const int MaxResearchUrls = 3;
+
+    /// <summary>Maximum characters of summarized web-research context injected into the blog prompt.</summary>
+    public const int WebResearchMaxChars = 2500;
+
+    /// <summary>Default <c>max_length</c> argument passed to the MCP <c>fetch_content</c> tool.</summary>
+    public const int McpFetchMaxLength = 10000;
 }

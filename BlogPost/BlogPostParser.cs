@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using WPAIPoster.Config;
 
 namespace WPAIPoster.BlogPost;
 
@@ -11,6 +12,7 @@ namespace WPAIPoster.BlogPost;
 /// </summary>
 public static class BlogPostParser
 {
+    
     private static readonly JsonSerializerOptions Options = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -58,7 +60,7 @@ public static class BlogPostParser
         if (string.IsNullOrWhiteSpace(result.BodyHtml))
             throw new FormatException(
                 "The model response contained no post body (looked for bodyHtml/body/content). " +
-                "Raw response:\n" + Truncate(raw!, 2000));
+                "Raw response:\n" + Truncate(raw!, AppLimits.WebResearchMaxChars));
 
         return result;
     }

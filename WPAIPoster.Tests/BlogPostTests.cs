@@ -464,6 +464,39 @@ public class BlogPostGeneratorTests
         Assert.Contains("(none)", result);
         Assert.DoesNotContain("{SOURCE_LINKS}", result);
     }
+
+    [Fact]
+    public void BuildPrompt_WebResearchToken()
+    {
+        string result = BlogPostGenerator.BuildPrompt(
+            "Research:\n{WEB_RESEARCH}", "x", "", webResearch: "Key fact from source.");
+
+        Assert.Contains("Key fact from source.", result);
+        Assert.DoesNotContain("{WEB_RESEARCH}", result);
+    }
+
+    [Fact]
+    public void BuildPrompt_WebResearchMissing_RendersNone()
+    {
+        string result = BlogPostGenerator.BuildPrompt("Research:\n{WEB_RESEARCH}", "x", "");
+        Assert.Contains("(none)", result);
+        Assert.DoesNotContain("{WEB_RESEARCH}", result);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PassesWebResearchToPrompt()
+    {
+        var fake = new FakeLlmClient("""
+            { "metaTitle": "T", "metaDescription": "D", "h1": "H", "bodyHtml": "<p>B</p>",
+              "imageThemes": ["a"], "internalLinks": [], "cta": "C" }
+            """);
+        var gen = new BlogPostGenerator(fake, "Research: {WEB_RESEARCH}");
+
+        BlogPostResult post = await gen.GenerateAsync("write about cats", "", webResearch: "Fetched fact.");
+
+        Assert.Equal("H", post.H1);
+        Assert.Contains("Fetched fact.", fake.Prompts[0]);
+    }
 }
 
 public class BriefLinksTests

@@ -1,5 +1,6 @@
 using WPAIPoster.Images;
 using WPAIPoster.Llm;
+using WPAIPoster.Mcp;
 using WPAIPoster.Wordpress;
 
 namespace WPAIPoster.Tests;
@@ -90,4 +91,25 @@ public sealed class ScriptedLlmClient : ILlmClient
         Calls++;
         return step is Exception ex ? Task.FromException<string?>(ex) : Task.FromResult((string?)step);
     }
+}
+
+/// <summary>An <see cref="IMcpPageFetcher"/> that returns canned page text by URL.</summary>
+public sealed class FakeMcpPageFetcher : IMcpPageFetcher
+{
+    private readonly Dictionary<string, string?> _pages;
+
+    public FakeMcpPageFetcher(Dictionary<string, string?> pagesByUrl) => _pages = pagesByUrl;
+
+    public Task<string?> FetchContentAsync(string url, int maxLength)
+        => Task.FromResult(_pages.TryGetValue(url, out var page) ? page : null);
+}
+
+/// <summary>An <see cref="IMcpPageFetcher"/> whose every fetch throws the supplied exception.</summary>
+public sealed class ThrowingMcpPageFetcher : IMcpPageFetcher
+{
+    private readonly Exception _ex;
+
+    public ThrowingMcpPageFetcher(Exception ex) => _ex = ex;
+
+    public Task<string?> FetchContentAsync(string url, int maxLength) => Task.FromException<string?>(_ex);
 }

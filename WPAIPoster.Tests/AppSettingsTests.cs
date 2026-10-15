@@ -148,4 +148,30 @@ public class AppSettingsTests : IDisposable
 
         Assert.Equal(30, s.LlmRecoveryWaitSeconds);
     }
+
+    [Fact]
+    public void Load_WebSearchMcp_Deserializes()
+    {
+        string path = Write("""
+            {
+              "web-search-mcp": {
+                "duck-duck-go-search": {
+                  "type": "remote",
+                  "url": "http://192.168.1.23:7071/sse",
+                  "enabled": true
+                }
+              }
+            }
+            """);
+
+        var s = AppSettings.Load(path);
+
+        Assert.NotNull(s.WebSearchMcp);
+        Assert.Single(s.WebSearchMcp!);
+        var config = s.WebSearchMcp!["duck-duck-go-search"];
+        Assert.Equal("remote", config.Type);
+        Assert.Equal("http://192.168.1.23:7071/sse", config.Url);
+        Assert.True(config.EffectiveEnabled);
+        Assert.True(config.IsSseEndpoint);
+    }
 }

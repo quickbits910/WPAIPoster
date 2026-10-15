@@ -13,7 +13,7 @@ public sealed record ExistingPost(string Id, string Title, string Url);
 public sealed class ExistingPostsFetcher(ISshRunner runner, string wordPressFolder)
 {
     /// <summary>Returns published posts, or an empty list if the command fails or returns nothing.</summary>
-    public IReadOnlyList<ExistingPost> Fetch(int limit = 200)
+    public IReadOnlyList<ExistingPost> Fetch(int limit = 40)
     {
         string cmd = WpCliCommands.InFolder(wordPressFolder, WpCliCommands.ListPublishedPosts(limit));
         SshCommandResult result = runner.Run(cmd);

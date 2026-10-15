@@ -3,6 +3,7 @@ using WPAIPoster.BlogPost;
 using WPAIPoster.Config;
 using WPAIPoster.Images;
 using WPAIPoster.Llm;
+using WPAIPoster.Mcp;
 using WPAIPoster.Ui;
 using WPAIPoster.Wordpress;
 
@@ -115,7 +116,7 @@ ui.Detail($"Provider: {settings.Provider}, model: {model}, vision: {visionModel}
 ui.Detail($"Endpoint: {settings.BaseUrl ?? "(provider default)"}, vision endpoint: {settings.EffectiveVisionBaseUrl ?? "(provider default)"}");
 ui.Detail($"Publish: {publish}, images: {(noImages ? "off" : imagesPerPost.ToString())}, output: {outputFolder}");
 
-using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(600) };
+using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(900) };
 // Resilient sits inside Logging so each prompt is logged once, not once per retry. Each endpoint gets its
 // own decorator (and so its own "latched down" state): retries, then a pause for the user to fix it.
 var recovery = LlmRecoveryOptions.Default(settings.EffectiveLlmRecoveryWait);
@@ -154,9 +155,43 @@ try
     if (userTags.Count > 0)
         ui.Info($"Using {userTags.Count} author tag(s) for image selection: {string.Join(", ", userTags)}");
 
+    string? webResearch = null;
+    if (briefLinks.Count > 0 && settings.WebSearchMcp is { Count: > 0 })
+    {
+        var enabledMcp = settings.WebSearchMcp!
+            .Where(e => e.Value.EffectiveEnabled && !string.IsNullOrWhiteSpace(e.Value.EffectiveUrl))
+            .ToList();
+
+        if (enabledMcp.Count > 0)
+        {
+            var (mcpName, mcpConfig) = enabledMcp[0];
+            try
+            {
+                ui.Rule("Web research");
+                ui.Info($"Using MCP '{mcpName}' at {mcpConfig.EffectiveUrl} for the first {Math.Min(briefLinks.Count, AppLimits.MaxResearchUrls)} brief URL(s)");
+
+                var mcpFetcher = new McpClient(http, mcpConfig);
+                var researcher = WebResearch.Create(textClient, mcpFetcher, WebResearch.PromptFileNameFor(mcpName));
+
+                webResearch = await ui.StatusAsync("Fetching and summarizing source pages",
+                    async () => await researcher.ResearchAsync(brief, briefLinks, AppLimits.MaxResearchUrls, AppLimits.WebResearchMaxChars));
+
+                if (webResearch is { Length: > 0 })
+                    ui.Success($"Added {webResearch.Length} character(s) of web-research context");
+                else
+                    ui.Warn("Web research produced no usable summary — continuing without it");
+            }
+            catch (Exception ex)
+            {
+                ui.Warn($"Web research failed ({LlmHttpErrors.Describe(ex)}) — continuing without it");
+                webResearch = null;
+            }
+        }
+    }
+
     var generator = BlogPostGenerator.Create(textClient);
     BlogPostResult post = await ui.StatusAsync("Generating blog post",
-        () => generator.GenerateAsync(brief, existingText, sourceLinks: briefLinks));
+        () => generator.GenerateAsync(brief, existingText, sourceLinks: briefLinks, webResearch: webResearch));
     ui.Success("Draft generated");
     WarnIfTruncated(post);
 
@@ -189,7 +224,7 @@ try
             ui.Warn($"Editor requested a rewrite (attempt {rewrite + 1}/{AppLimits.MaxEditorRevisions})");
             ui.Detail($"Editor feedback (cumulative, {feedbackNotes.Count} round(s)):\n{combinedFeedback}");
             post = await ui.StatusAsync("Rewriting blog post",
-                () => generator.GenerateAsync(brief, existingText, combinedFeedback, briefLinks));
+                () => generator.GenerateAsync(brief, existingText, combinedFeedback, briefLinks, webResearch));
             WarnIfTruncated(post);
             review = await ui.StatusAsync("Editor reviewing rewrite", () => reviewer.ReviewAsync(brief, post));
         }

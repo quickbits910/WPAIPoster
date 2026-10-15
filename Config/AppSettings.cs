@@ -171,6 +171,13 @@ public sealed class AppSettings
     [JsonPropertyName("seoMetaKeys")]
     public SeoMetaKeys? SeoMetaKeys { get; set; }
 
+    /// <summary>
+    /// Optional MCP web-search servers. Only the first enabled entry is used. Each entry is keyed by the
+    /// prompt file name stem (e.g. <c>duck-duck-go-search</c> loads <c>Prompts/duck-duck-go-search.json</c>).
+    /// </summary>
+    [JsonPropertyName("web-search-mcp")]
+    public Dictionary<string, McpServerConfig>? WebSearchMcp { get; set; }
+
     /// <summary>Folder where each run writes its log file. Null uses the default ("./Output").</summary>
     [JsonPropertyName("outputFolder")]
     public string? OutputFolder { get; set; }
